@@ -1,0 +1,28 @@
+{
+  "name": "tiny1c",
+  "displayName": "tiny1C — правила разработки 1С",
+  "version": "0.1.0",
+  "description": "Правила разработки на 1С:Предприятии: у каждого свой источник и своя проверка. Направления по конфигурациям, глоссарии, карты объектов.",
+  "author": {
+    "name": "Ivan Gurkin",
+    "url": "https://github.com/bigsofter"
+  },
+  "homepage": "https://github.com/bigsofter/tiny1C",
+  "repository": "https://github.com/bigsofter/tiny1C",
+  "license": "MIT",
+  "keywords": [
+    "1c",
+    "bsl",
+    "edt",
+    "rules",
+    "mcp"
+  ],
+  "mcpServers": {
+    "tiny1c": {
+      "command": "python3",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/mcp/server.py"
+      ]
+    }
+  }
+}

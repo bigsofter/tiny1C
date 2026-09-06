@@ -1,0 +1,17 @@
+{
+  "name": "tiny1c",
+  "owner": {
+    "name": "Ivan Gurkin",
+    "url": "https://github.com/bigsofter"
+  },
+  "plugins": [
+    {
+      "name": "tiny1c",
+      "source": "./",
+      "description": "Правила разработки 1С с источником и проверкой у каждого правила, MCP-сервер",
+      "version": "0.1.0",
+      "license": "MIT",
+      "homepage": "https://github.com/bigsofter/tiny1C"
+    }
+  ]
+}

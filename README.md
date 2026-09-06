@@ -30,18 +30,40 @@
 
 ## Как подключить к агенту
 
-MCP-сервер — один файл на стандартной библиотеке Python 3.8+, ставить нечего.
+Сервер работает по stdio: агент запускает его как обычный процесс у себя на
+машине. Хостинг, порты и сеть не нужны — нужен только Python 3.8+, никаких
+зависимостей.
+
+### Плагином Claude Code
+
+```bash
+claude plugin marketplace add bigsofter/tiny1C
+claude plugin install tiny1c@tiny1c
+```
+
+Клонировать вручную не нужно: набор приезжает вместе с плагином, обновляется
+через `claude plugin update tiny1c`.
+
+### Клоном и путём в конфигурации
+
+```bash
+git clone https://github.com/bigsofter/tiny1C
+```
 
 ```json
 {
   "mcpServers": {
-    "tiny1c": { "command": "python3", "args": ["<путь>/tiny1C/mcp/server.py"] }
+    "tiny1c": {
+      "command": "python3",
+      "args": ["${TINY1C_HOME:-../tiny1C}/mcp/server.py"]
+    }
   }
 }
 ```
 
-Для Claude Code это `.mcp.json` в корне проекта, для других агентов — их
-собственный файл конфигурации MCP.
+Для Claude Code это `.mcp.json` в корне проекта, для остальных агентов — их
+собственный файл конфигурации MCP. Переменная `TINY1C_HOME` позволяет не
+писать в общий репозиторий путь конкретной машины. Обновление — `git pull`.
 
 ## Инструменты сервера
 
@@ -99,7 +121,15 @@ check: ["checkconfig-ext:разбор модулей форм", "smoke-forms:ф�
 `refcheck`, `xml-audit`, `manual`. Вид `manual` — честное признание, что правило
 ловится только человеком; таких сейчас 19 из 36, и это видно в манифесте.
 
-Как пополнять набор — в [CONTRIBUTING.md](CONTRIBUTING.md). Откуда что взялось
+## Как добавить правило
+
+```bash
+scripts/new-rule.py core forms-011 "Короткий заголовок"   # заготовка из шаблона
+# заполнить: категория, источник, check, текст
+scripts/manifest.py && scripts/hygiene.py                 # пересобрать и проверить
+```
+
+Подробнее — в [CONTRIBUTING.md](CONTRIBUTING.md). Откуда что взялось
 и что сознательно не заимствовано — в [PROVENANCE.md](PROVENANCE.md).
 
 ## Лицензии
