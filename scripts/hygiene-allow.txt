@@ -1,0 +1,21 @@
+# Исключения проверки гигиены: путь<пробел>имя_проверки
+# Каждое исключение объясняется — молчаливое подавление опаснее самой находки.
+
+# Скрипт проверки содержит сами искомые образцы.
+scripts/hygiene.py	чужой-корпус-unica
+scripts/hygiene.py	чужой-корпус-comol
+scripts/hygiene.py	заказчик
+scripts/hygiene.py	логин
+scripts/hygiene.py	токен
+scripts/hygiene.py	приватный-ключ
+scripts/hygiene.py	путь-mac
+scripts/hygiene.py	путь-linux
+scripts/hygiene.py	путь-windows
+scripts/hygiene.py	путь-проекта
+scripts/hygiene.py	ip
+scripts/hygiene.py	пароль
+scripts/hygiene.py	переменная-пароля
+
+# PROVENANCE называет заимствованные проекты поимённо — в этом его смысл.
+PROVENANCE.md	чужой-корпус-unica
+PROVENANCE.md	чужой-корпус-comol

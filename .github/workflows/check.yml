@@ -1,0 +1,25 @@
+name: check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Манифест собран и совпадает с правилами
+        run: python3 scripts/manifest.py --проверить
+      - name: Гигиена публикации
+        run: python3 scripts/hygiene.py
+      - name: MCP-сервер отвечает
+        run: |
+          echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+            | python3 mcp/server.py | python3 -c "import json,sys; \
+              tools=json.loads(sys.stdin.readline())['result']['tools']; \
+              print('инструментов:', len(tools)); \
+              sys.exit(0 if len(tools) == 7 else 1)"
