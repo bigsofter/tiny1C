@@ -38,11 +38,11 @@
 
 ```bash
 claude plugin marketplace add bigsofter/tiny1C
-claude plugin install tiny1c@tinycio
+claude plugin install 1c@tinycio
 ```
 
 Клонировать вручную не нужно: набор приезжает вместе с плагином, обновляется
-через `claude plugin update tiny1c`.
+через `claude plugin update 1c`.
 
 ### Клоном и путём в конфигурации
 
