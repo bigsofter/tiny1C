@@ -13,7 +13,8 @@
   2. пути машины разработчика — /Users/…, /home/…, C:\\…, ~/Dev, ~/EDT;
   3. следы чужих корпусов правил — заимствованный текст вместо своего;
   4. артефакты 1С и просто бинарники — .cf, .epf, .dt, базы, архивы;
-  5. правила без поля «источник» — правило, о котором неизвестно, откуда оно.
+  5. правила без поля «источник» — правило, о котором неизвестно, откуда оно;
+  6. расхождение README с манифестом — таблица направлений отстала от набора.
 
 Разрешённые исключения — в scripts/hygiene-allow.txt: строка «путь<TAB>маркер».
 Каждое исключение объясняется комментарием: молчаливое подавление здесь опаснее
@@ -24,12 +25,15 @@
   scripts/hygiene.py --список   показать, что именно ищется
 """
 
+import json
 import os
 import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ALLOW_FILE = os.path.join(ROOT, "scripts", "hygiene-allow.txt")
+MANIFEST_FILE = os.path.join(ROOT, "manifest.json")
+README_FILE = os.path.join(ROOT, "README.md")
 SKIP_DIRS = {".git", "__pycache__", ".idea", ".vscode"}
 MAX_BYTES = 512 * 1024
 
@@ -104,6 +108,56 @@ def check_sources(findings):
                                  "правило без поля «источник»"))
 
 
+def check_readme(findings):
+    """Таблица направлений в README обязана совпадать с манифестом.
+
+    Счётчики правил и терминов в README ставятся руками, а растут при каждом
+    новом правиле, поэтому расходятся молча: читатель видит одно число, сервер
+    отдаёт другое. Сверка механическая — ошибка ловится на push, а не глазами.
+
+    Ожидаемый вид строки: «| `код` | что покрывает | правил | терминов |»,
+    где правил — число либо «открыто» для направления без правил, а терминов —
+    число либо «—», если глоссария ещё нет.
+    """
+    if not (os.path.exists(MANIFEST_FILE) and os.path.exists(README_FILE)):
+        return
+    with open(MANIFEST_FILE, encoding="utf-8") as handle:
+        manifest = json.load(handle)
+    with open(README_FILE, encoding="utf-8") as handle:
+        lines = handle.readlines()
+
+    rows = {}
+    for number, line in enumerate(lines, 1):
+        match = re.match(r"^\|\s*`([a-z0-9_-]+)`\s*\|[^|]*\|([^|]*)\|([^|]*)\|", line)
+        if match:
+            rows[match.group(1)] = (number, match.group(2).strip(), match.group(3).strip())
+
+    rel = os.path.relpath(README_FILE, ROOT)
+    for track in manifest.get("направления", []):
+        code = track["код"]
+        if code not in rows:
+            findings.append((rel, 0, "README",
+                             "направления «%s» нет в таблице" % code))
+            continue
+        number, rules, terms = rows[code]
+        want_rules = "открыто" if track["статус"] == "открыто" else str(track["правил"])
+        want_terms = "—" if not track["терминов"] else str(track["терминов"])
+        if rules != want_rules:
+            findings.append((rel, number, "README",
+                             "%s: правил в таблице «%s», в манифесте «%s»"
+                             % (code, rules, want_rules)))
+        if terms != want_terms:
+            findings.append((rel, number, "README",
+                             "%s: терминов в таблице «%s», в манифесте «%s»"
+                             % (code, terms, want_terms)))
+
+    known = {track["код"] for track in manifest.get("направления", [])}
+    for code, (number, _, _) in sorted(rows.items()):
+        if code not in known:
+            findings.append((rel, number, "README",
+                             "направления «%s» в наборе нет" % code))
+
+
 def main():
     if "--список" in sys.argv[1:]:
         print("Проверки гигиены:")
@@ -111,6 +165,7 @@ def main():
             print("  %-22s %s" % (name, note))
         print("  %-22s %s" % ("бинарник", "запрещённые расширения и файлы больше 512 КБ"))
         print("  %-22s %s" % ("источник", "правило без поля «источник»"))
+        print("  %-22s %s" % ("README", "таблица направлений против манифеста"))
         return 0
 
     allow = read_allow()
@@ -142,6 +197,7 @@ def main():
                     findings.append((rel, number, name, note))
 
     check_sources(findings)
+    check_readme(findings)
 
     if not findings:
         print("Гигиена: чисто — приватного, чужих корпусов и бинарников не найдено.")
