@@ -14,7 +14,12 @@
   3. следы чужих корпусов правил — заимствованный текст вместо своего;
   4. артефакты 1С и просто бинарники — .cf, .epf, .dt, базы, архивы;
   5. правила без поля «источник» — правило, о котором неизвестно, откуда оно;
-  6. расхождение README с манифестом — таблица направлений отстала от набора.
+     карточки инструментов без «идея», «источник», «check» или «опасность»;
+  6. расхождение README с манифестом — таблица направлений и доля правил,
+     ловимых только человеком, отстали от набора.
+
+Фикстуры (`fixtures/**/*.xml`) сканируются так же, как тексты: синтетическая
+выгрузка не должна притащить ни чужих путей, ни содержимого типовых.
 
 Разрешённые исключения — в scripts/hygiene-allow.txt: строка «путь<TAB>маркер».
 Каждое исключение объясняется комментарием: молчаливое подавление здесь опаснее
@@ -58,7 +63,9 @@ PATTERNS = [
 
 BINARY_SUFFIXES = {".cf", ".cfu", ".cfe", ".epf", ".erf", ".dt", ".1cd", ".zip", ".7z",
                    ".rar", ".gz", ".tar", ".png", ".jpg", ".jpeg", ".pdf", ".xlsx", ".docx"}
-TEXT_SUFFIXES = {".md", ".py", ".json", ".yml", ".yaml", ".txt", ".sh", ".toml", ".cfg"}
+TEXT_SUFFIXES = {".md", ".py", ".json", ".yml", ".yaml", ".txt", ".sh", ".toml", ".cfg",
+                 ".xml"}
+TOOL_CARD_FIELDS = ["идея", "источник", "check", "опасность"]
 
 
 def read_allow():
@@ -107,6 +114,21 @@ def check_sources(findings):
                 findings.append((os.path.relpath(path, ROOT), 0, "источник",
                                  "правило без поля «источник»"))
 
+    tools = os.path.join(ROOT, "tools")
+    for current, dirs, files in os.walk(tools):
+        dirs.sort()
+        for name in sorted(files):
+            if not name.endswith(".md") or name in ("_TEMPLATE.md", "README.md"):
+                continue
+            path = os.path.join(current, name)
+            with open(path, encoding="utf-8") as handle:
+                head = handle.read(4000).split("\n---", 1)[0]
+            for field in TOOL_CARD_FIELDS:
+                match = re.search(r"\n%s:[ \t]*(\S.*)" % re.escape(field), head)
+                if not match or match.group(1).strip() in ('""', "[]", "''"):
+                    findings.append((os.path.relpath(path, ROOT), 0, "источник",
+                                     "карточка инструмента без поля «%s»" % field))
+
 
 def check_readme(findings):
     """Таблица направлений в README обязана совпадать с манифестом.
@@ -151,6 +173,16 @@ def check_readme(findings):
                              "%s: терминов в таблице «%s», в манифесте «%s»"
                              % (code, terms, want_terms)))
 
+    manual = len(manifest.get("ловятся_только_человеком", []))
+    total = manifest.get("правил", 0)
+    for number, line in enumerate(lines, 1):
+        for match in re.finditer(r"таких сейчас (\d+) из (\d+)", line):
+            if (int(match.group(1)), int(match.group(2))) != (manual, total):
+                findings.append((rel, number, "README",
+                                 "ловятся только человеком: в README «%s из %s», "
+                                 "в манифесте «%d из %d»"
+                                 % (match.group(1), match.group(2), manual, total)))
+
     known = {track["код"] for track in manifest.get("направления", [])}
     for code, (number, _, _) in sorted(rows.items()):
         if code not in known:
@@ -164,8 +196,10 @@ def main():
         for name, _, note in PATTERNS:
             print("  %-22s %s" % (name, note))
         print("  %-22s %s" % ("бинарник", "запрещённые расширения и файлы больше 512 КБ"))
-        print("  %-22s %s" % ("источник", "правило без поля «источник»"))
-        print("  %-22s %s" % ("README", "таблица направлений против манифеста"))
+        print("  %-22s %s" % ("источник", "правило без поля «источник», карточка "
+                                          "инструмента без идеи/источника/check/опасности"))
+        print("  %-22s %s" % ("README", "таблица направлений и доля «только человеком» "
+                                        "против манифеста"))
         return 0
 
     allow = read_allow()

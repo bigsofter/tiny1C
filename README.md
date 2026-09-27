@@ -130,7 +130,7 @@ check: ["checkconfig-ext:разбор модулей форм", "smoke-forms:ф�
 `check` пишется как «вид:описание». Виды: `lint`, `checkconfig`,
 `checkconfig-ext`, `smoke-forms`, `smoke-samples`, `smoke-print`, `fixtures`,
 `refcheck`, `xml-audit`, `manual`. Вид `manual` — честное признание, что правило
-ловится только человеком; таких сейчас 19 из 36, и это видно в манифесте.
+ловится только человеком; таких сейчас 27 из 73, и это видно в манифесте.
 
 ## Как добавить правило
 

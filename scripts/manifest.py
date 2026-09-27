@@ -17,7 +17,12 @@
   5. каждая запись `check` — «вид:описание», вид из закрытого словаря.
      Правило, которое не может назвать, чем ловится, — не правило;
   6. глоссарий разбирается как таблица с колонками термин/синонимы/объекты/
-     пояснение.
+     пояснение;
+  7. карточки инструментов `tools/<группа>/<инструмент>.md` — раздел
+     «инструменты»: группа, исполнение, опасность и статус из закрытых словарей,
+     непустая `идея` (для AGPL/GPL — с пометкой «только идея»), источник и check
+     по тем же правилам, что у правил. Реализованный инструмент обязан иметь
+     проверку вида `fixtures` — инструмент без фикстуры не публикуется.
 
 Использование:
   scripts/manifest.py             собрать manifest.json
@@ -26,6 +31,7 @@
 
 import json
 import os
+import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -44,6 +50,14 @@ RULE_REQUIRED = ["id", "направление", "категория", "серь
 TRACK_REQUIRED = ["код", "название", "вид", "платформы", "статус"]
 TRACK_KINDS = ["ядро", "с-нуля", "типовая"]
 TRACK_STATES = ["ведётся", "открыто"]
+
+TOOLS_DIR = os.path.join(ROOT, "tools")
+TOOL_REQUIRED = ["id", "группа", "инструмент", "сигнатура", "исполнение", "опасность",
+                 "идея", "источник", "check", "статус", "правила"]
+TOOL_GROUPS = ["introspection", "ops-copy", "debug", "ui", "help"]
+TOOL_EXECUTION = ["offline", "agent-edt", "runner-copy", "runner-ro", "runner-ui"]
+TOOL_DANGER = ["read", "write-copy", "exec-copy"]
+TOOL_STATES = ["реализован", "карточка"]
 
 
 def parse_scalar(raw):
@@ -119,6 +133,97 @@ def read_glossary(path):
     return terms
 
 
+def check_source(data, where, errors):
+    """Источник начинается одним из видов словаря SOURCES."""
+    source = data.get("источник", "")
+    if not isinstance(source, str) or ":" not in source \
+            or source.split(":", 1)[0] not in SOURCES:
+        errors.append("%s: источник «%s» — нужен вид из списка: %s"
+                      % (where, source, ", ".join(SOURCES)))
+
+
+def check_checks(data, where, errors):
+    """Непустой список check из записей «вид:описание». Возвращает список."""
+    checks = data.get("check", [])
+    if isinstance(checks, str):
+        errors.append("%s: check должен быть списком" % where)
+        checks = [checks]
+    if not checks:
+        errors.append("%s: пустой check — запись не говорит, чем ловится" % where)
+    for entry in checks:
+        kind = entry.split(":", 1)[0]
+        if kind not in CHECKS:
+            errors.append("%s: неизвестный вид проверки «%s» (нужен из: %s)"
+                          % (where, kind, ", ".join(CHECKS)))
+        if ":" not in entry or not entry.split(":", 1)[1].strip():
+            errors.append("%s: проверка «%s» без описания" % (where, entry))
+    return checks
+
+
+def collect_tools(rule_ids, errors):
+    """Карточки инструментов tools/<группа>/<инструмент>.md (кроме _TEMPLATE.md)."""
+    tools = []
+    if not os.path.isdir(TOOLS_DIR):
+        return tools
+    seen = set()
+    for current, dirs, files in os.walk(TOOLS_DIR):
+        dirs.sort()
+        for name in sorted(files):
+            if not name.endswith(".md") or name in ("_TEMPLATE.md", "README.md"):
+                continue
+            path = os.path.join(current, name)
+            rel = os.path.relpath(path, ROOT).replace(os.sep, "/")
+            data, _ = read_document(path)
+            if data is None:
+                errors.append("%s: нет фронтматтера" % rel)
+                continue
+            for field in TOOL_REQUIRED:
+                if field not in data:
+                    errors.append("%s: нет поля «%s»" % (rel, field))
+            tool_id = data.get("id", "")
+            if not isinstance(tool_id, str) or not re.match(r"^[a-z]+-\d{3}$", tool_id):
+                errors.append("%s: id «%s» не по формату «группа-001»" % (rel, tool_id))
+            if tool_id in seen or tool_id in rule_ids:
+                errors.append("%s: id «%s» уже занят в наборе" % (rel, tool_id))
+            seen.add(tool_id)
+            if data.get("инструмент") != name[:-3]:
+                errors.append("%s: инструмент «%s» не совпадает с именем файла"
+                              % (rel, data.get("инструмент")))
+            group_dir = os.path.basename(current)
+            if data.get("группа") != group_dir:
+                errors.append("%s: группа «%s» не совпадает с каталогом «%s»"
+                              % (rel, data.get("группа"), group_dir))
+            for field, allowed in (("группа", TOOL_GROUPS), ("исполнение", TOOL_EXECUTION),
+                                   ("опасность", TOOL_DANGER), ("статус", TOOL_STATES)):
+                if data.get(field) not in allowed:
+                    errors.append("%s: неизвестное значение «%s» поля «%s» (нужно из: %s)"
+                                  % (rel, data.get(field), field, ", ".join(allowed)))
+            idea = data.get("идея", "")
+            if not isinstance(idea, str) or not idea.strip():
+                errors.append("%s: пустая «идея» — откуда взят инструмент" % rel)
+            elif re.search(r"\b(A?GPL|LGPL)", idea) and "только идея" not in idea:
+                errors.append("%s: образец под (A|L)GPL — в «идея» нужна пометка «только идея»"
+                              % rel)
+            check_source(data, rel, errors)
+            checks = check_checks(data, rel, errors)
+            kinds = sorted({entry.split(":", 1)[0] for entry in checks})
+            if data.get("статус") == "реализован" and "fixtures" not in kinds:
+                errors.append("%s: реализованный инструмент без проверки вида fixtures" % rel)
+            linked = data.get("правила", [])
+            if not isinstance(linked, list):
+                errors.append("%s: «правила» должны быть списком" % rel)
+                linked = []
+            for rule_id in linked:
+                if rule_id not in rule_ids:
+                    errors.append("%s: правила «%s» в наборе нет" % (rel, rule_id))
+            card = dict(data)
+            card["файл"] = rel
+            card["виды_проверок"] = kinds
+            tools.append(card)
+    tools.sort(key=lambda card: card.get("id", ""))
+    return tools
+
+
 def collect():
     """Разбор дерева tracks. Возвращает (манифест, список ошибок)."""
     errors, tracks, rules = [], [], []
@@ -179,25 +284,9 @@ def collect():
                     if platform not in PLATFORMS:
                         errors.append("%s/%s: неизвестная платформа «%s»"
                                       % (code, name, platform))
-                source = data.get("источник", "")
-                if not isinstance(source, str) or ":" not in source \
-                        or source.split(":", 1)[0] not in SOURCES:
-                    errors.append("%s/%s: источник «%s» — нужен вид из списка: %s"
-                                  % (code, name, source, ", ".join(SOURCES)))
-                checks = data.get("check", [])
-                if isinstance(checks, str):
-                    errors.append("%s/%s: check должен быть списком" % (code, name))
-                    checks = [checks]
-                if not checks:
-                    errors.append("%s/%s: пустой check — правило не говорит, чем ловится"
-                                  % (code, name))
-                for entry in checks:
-                    kind = entry.split(":", 1)[0]
-                    if kind not in CHECKS:
-                        errors.append("%s/%s: неизвестный вид проверки «%s» (нужен из: %s)"
-                                      % (code, name, kind, ", ".join(CHECKS)))
-                    if ":" not in entry or not entry.split(":", 1)[1].strip():
-                        errors.append("%s/%s: проверка «%s» без описания" % (code, name, entry))
+                where = "%s/%s" % (code, name)
+                check_source(data, where, errors)
+                checks = check_checks(data, where, errors)
                 rule = dict(data)
                 rule["файл"] = "tracks/%s/rules/%s" % (code, name)
                 rule["виды_проверок"] = sorted({entry.split(":", 1)[0] for entry in checks})
@@ -225,6 +314,7 @@ def collect():
                 by_object.setdefault(obj, [])
 
     manual_only = [rule["id"] for rule in rules if rule["виды_проверок"] == ["manual"]]
+    tools = collect_tools({rule["id"] for rule in rules}, errors)
     manifest = {
         "версия": 1,
         "направлений": len(tracks),
@@ -233,6 +323,8 @@ def collect():
         "объекты": {key: sorted(value) for key, value in sorted(by_object.items())},
         "направления": tracks,
         "правила": rules,
+        "инструментов": len(tools),
+        "инструменты": tools,
     }
     return manifest, errors
 
@@ -263,9 +355,10 @@ def main():
 
     with open(MANIFEST, "w", encoding="utf-8") as handle:
         handle.write(body)
-    print("Записан manifest.json: направлений %d, правил %d, только человеком ловятся %d"
+    print("Записан manifest.json: направлений %d, правил %d, только человеком ловятся %d, "
+          "инструментов %d"
           % (manifest["направлений"], manifest["правил"],
-             len(manifest["ловятся_только_человеком"])))
+             len(manifest["ловятся_только_человеком"]), manifest["инструментов"]))
     for track in manifest["направления"]:
         print("  %-11s %-42s правил %2d, терминов %2d"
               % (track["код"], track["название"], track["правил"], track["терминов"]))
