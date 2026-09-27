@@ -23,3 +23,12 @@ jobs:
               tools=json.loads(sys.stdin.readline())['result']['tools']; \
               print('инструментов:', len(tools)); \
               sys.exit(0 if len(tools) == 7 else 1)"
+      - name: С флагом --tools offline инструментов 8
+        run: |
+          echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+            | python3 mcp/server.py --tools offline | python3 -c "import json,sys; \
+              tools=json.loads(sys.stdin.readline())['result']['tools']; \
+              print('инструментов:', len(tools)); \
+              sys.exit(0 if len(tools) == 8 else 1)"
+      - name: Инструменты на фикстурах (golden)
+        run: python3 scripts/tools-check.py
