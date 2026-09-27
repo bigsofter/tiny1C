@@ -32,6 +32,13 @@ MANIFEST = os.path.join(ROOT, "manifest.json")
 BOM = b"\xef\xbb\xbf"
 LIMIT = 20
 MAX_DEPTH = 16  # вложенность подсистем; в живых конфигурациях 3–4 уровня
+MAX_SUBSYSTEMS = 5000  # в типовой УНФ 3.0 их ~740
+MAX_FILE_BYTES = 256 * 1024 * 1024  # крупнейший файл типовой выгрузки — единицы МБ
+CHUNK = 65536
+# 1С не пишет ни DTD, ни сущностей. Их появление — признак подмены файла; expat
+# старых версий (системный Python macOS — 2.2.8) раскрывает вложенные сущности
+# экспоненциально («billion laughs»), поэтому такой файл не разбирается вовсе.
+DTD_MARKERS = (b"<!DOCTYPE", b"<!ENTITY")
 
 # Вид метаданных: англ. имя в выгрузке -> (рус. имя, каталог, вид навигационной ссылки).
 KINDS = {
@@ -77,6 +84,32 @@ HINT_EMPTY = ("Ничего не найдено. Попробуйте полно
 
 class DumpError(ValueError):
     """Выгрузку нельзя прочитать: нет каталога, нет Configuration.xml и т. п."""
+
+
+class UnsafeXml(ValueError):
+    """Файл нельзя отдавать разборщику: DTD, сущности или слишком большой размер."""
+
+
+def read_chunks(path):
+    """Байты файла порциями: без BOM, с отказом на DTD/сущностях и сверхразмере."""
+    size = os.stat(path).st_size
+    if size > MAX_FILE_BYTES:
+        raise UnsafeXml("файл больше предела %d байт (%d байт)" % (MAX_FILE_BYTES, size))
+    tail = b""
+    with open(path, "rb") as handle:
+        first = True
+        while True:
+            chunk = handle.read(CHUNK)
+            if not chunk:
+                return
+            if first and chunk.startswith(BOM):
+                chunk = chunk[len(BOM):]
+            first = False
+            window = tail + chunk
+            if any(marker in window for marker in DTD_MARKERS):
+                raise UnsafeXml("в файле DTD или объявление сущностей — 1С их не пишет")
+            tail = window[-16:]
+            yield chunk
 
 
 def fold(text):
@@ -197,6 +230,7 @@ class DumpIndex(object):
         self.containing = {}     # "Document.X" -> [ключи подсистем]
         self.roles = []
         self.rights = {}         # "Document.X" -> {"View": set, "Read": set}
+        self.visited = set()     # реальные пути прочитанных файлов подсистем
         self._build()
 
     # --- чтение файлов ---------------------------------------------------
@@ -221,45 +255,37 @@ class DumpIndex(object):
             return None
         return path
 
+    def rel(self, path):
+        return os.path.relpath(path, self.root).replace(os.sep, "/")
+
     def parse(self, path):
         try:
-            with open(path, "rb") as handle:
-                data = handle.read()
-        except OSError as error:
-            self.warnings.append("не читается %s: %s" % (os.path.relpath(path, self.root), error))
-            return None
-        if data.startswith(BOM):
-            data = data[len(BOM):]
-        try:
+            data = b"".join(read_chunks(path))
             return ET.fromstring(data)
+        except UnsafeXml as error:
+            self.warnings.append("файл %s отвергнут: %s" % (self.rel(path), error))
+        except OSError as error:
+            self.warnings.append("не читается %s: %s" % (self.rel(path), error))
         except ET.ParseError as error:
-            self.warnings.append("не разбирается XML %s: %s"
-                                 % (os.path.relpath(path, self.root), error))
-            return None
+            self.warnings.append("не разбирается XML %s: %s" % (self.rel(path), error))
+        return None
 
     def read_synonym(self, path):
         """Синоним объекта: разбор до первого <Synonym>, остальной файл не читается."""
         parser = ET.XMLPullParser(events=("end",))
         try:
-            with open(path, "rb") as handle:
-                first = True
-                while True:
-                    chunk = handle.read(65536)
-                    if not chunk:
-                        break
-                    if first and chunk.startswith(BOM):
-                        chunk = chunk[len(BOM):]
-                    first = False
-                    parser.feed(chunk)
-                    for _event, elem in parser.read_events():
-                        name = local(elem.tag)
-                        if name == "Synonym":
-                            return synonym_of(elem)
-                        if name == "Properties":
-                            return ""
+            for chunk in read_chunks(path):
+                parser.feed(chunk)
+                for _event, elem in parser.read_events():
+                    name = local(elem.tag)
+                    if name == "Synonym":
+                        return synonym_of(elem)
+                    if name == "Properties":
+                        return ""
+        except UnsafeXml as error:
+            self.warnings.append("файл %s отвергнут: %s" % (self.rel(path), error))
         except (OSError, ET.ParseError) as error:
-            self.warnings.append("не разбирается XML %s: %s"
-                                 % (os.path.relpath(path, self.root), error))
+            self.warnings.append("не разбирается XML %s: %s" % (self.rel(path), error))
         return ""
 
     # --- сборка индекса --------------------------------------------------
@@ -324,6 +350,17 @@ class DumpIndex(object):
         path = self.path(file_parts, required=True)
         if path is None:
             return
+        real = os.path.realpath(path)
+        if real in self.visited:
+            self.warnings.append("подсистема %s уже прочитана по другому пути (петля ссылок) — "
+                                 "пропущена" % "/".join(file_parts))
+            return
+        if len(self.visited) >= MAX_SUBSYSTEMS:
+            if len(self.visited) == MAX_SUBSYSTEMS:
+                self.warnings.append("подсистем больше %d — остальные не читаются" % MAX_SUBSYSTEMS)
+                self.visited.add(None)
+            return
+        self.visited.add(real)
         root = self.parse(path)
         if root is None:
             return
@@ -347,9 +384,17 @@ class DumpIndex(object):
             "состав": content,
             "видимость": self.read_command_interface(dir_parts),
         }
+        seen = set()
         for item in children(child(node, "ChildObjects"), "Subsystem"):
-            if text_of(item):
-                self.read_subsystem(dir_parts, text_of(item), key, depth + 1)
+            child_name = text_of(item)
+            if not child_name:
+                continue
+            if child_name in seen:
+                self.warnings.append("подсистема %s указана в %s дважды — повтор пропущен"
+                                     % (child_name, "/".join(file_parts)))
+                continue
+            seen.add(child_name)
+            self.read_subsystem(dir_parts, child_name, key, depth + 1)
 
     def read_command_interface(self, dir_parts):
         """{(объект, команда в нижнем регистре): {"общая": bool, "роли": {роль: bool}}}."""
@@ -392,12 +437,7 @@ class DumpIndex(object):
         path = self.path(["Roles", role, "Ext", "Rights.xml"])
         if path is None:
             return
-        root = self.parse(path)
-        if root is None:
-            return
-        for obj in root.iter():
-            if local(obj.tag) != "object":
-                continue
+        for obj in self.stream(path):
             full = normalize_full_name(text_of(child(obj, "name")))
             if not full:
                 continue  # права на реквизиты, команды и т. п. здесь не нужны
@@ -405,6 +445,26 @@ class DumpIndex(object):
                 right_name = text_of(child(right, "name"))
                 if right_name in ("View", "Read") and bool_of(child(right, "value"), False):
                     self.rights.setdefault(full, {}).setdefault(right_name, set()).add(role)
+
+    def stream(self, path, tag="object"):
+        """Элементы с локальным именем tag по мере разбора; разобранные сразу очищаются.
+
+        Права ролей в типовой выгрузке — тысяча файлов до 2 МБ: дерево целиком не
+        строится, память не растёт с размером файла.
+        """
+        parser = ET.XMLPullParser(events=("end",))
+        try:
+            for chunk in read_chunks(path):
+                parser.feed(chunk)
+                for _event, elem in parser.read_events():
+                    if local(elem.tag) == tag:
+                        yield elem
+                        elem.clear()
+            parser.close()
+        except UnsafeXml as error:
+            self.warnings.append("файл %s отвергнут: %s" % (self.rel(path), error))
+        except (OSError, ET.ParseError) as error:
+            self.warnings.append("не разбирается XML %s: %s" % (self.rel(path), error))
 
     # --- ответ -----------------------------------------------------------
 

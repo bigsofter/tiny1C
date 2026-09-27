@@ -244,14 +244,15 @@ class DumpBoundaries(unittest.TestCase):
         parts = dump.where_is(self.dump, "Справочник.Запчасти", manifest=TEST_MANIFEST)
         self.assertEqual(["Склад запчастей"],
                          [item["раздел"] for item in parts["объекты"][0]["размещения"]])
-        # Ссылка, которая ведёт обратно внутрь выгрузки, законна.
+        # Ссылка внутрь выгрузки на уже прочитанную подсистему — повтор, не второй раздел.
         os.remove(os.path.join(self.dump, "Subsystems", "Внешняя.xml"))
         os.symlink(os.path.join(self.dump, "Subsystems", "Склад.xml"),
                    os.path.join(self.dump, "Subsystems", "Внешняя.xml"))
         os.utime(os.path.join(self.dump, "Configuration.xml"), None)
         dump._CACHE.clear()
         parts = dump.where_is(self.dump, "Справочник.Запчасти", manifest=TEST_MANIFEST)
-        self.assertEqual(2, len(parts["объекты"][0]["размещения"]))
+        self.assertEqual(1, len(parts["объекты"][0]["размещения"]))
+        self.assertTrue(any("уже прочитана" in item for item in parts["предупреждения"]))
         # Объект есть, но синоним из внешнего файла не прочитан.
         leaked = dump.where_is(self.dump, "Документ.Утечка", manifest=TEST_MANIFEST)
         self.assertEqual("", leaked["объекты"][0]["синоним"])
