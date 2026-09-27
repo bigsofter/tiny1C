@@ -50,9 +50,16 @@
 	<object>
 		<name>DataProcessor.ПодборЗапчастей</name>
 		<right>
-			<name>Read</name>
+			<name>Use</name>
+			<value>true</value>
+		</right>
+		<right>
+			<name>View</name>
 			<value>false</value>
 		</right>
+	</object>
+	<object>
+		<name>CommonCommand.ПечатьЭтикеток</name>
 		<right>
 			<name>View</name>
 			<value>true</value>

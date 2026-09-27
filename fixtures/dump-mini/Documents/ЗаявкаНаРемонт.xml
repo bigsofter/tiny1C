@@ -10,7 +10,41 @@
 				</v8:item>
 			</Synonym>
 			<Comment/>
+			<UseStandardCommands>true</UseStandardCommands>
 		</Properties>
-		<ChildObjects/>
+		<ChildObjects>
+			<Command uuid="00000000-0000-4000-8000-000000000003">
+				<Properties>
+					<Name>ОткрытьЗаявкиВРаботе</Name>
+					<Synonym>
+						<v8:item>
+							<v8:lang>ru</v8:lang>
+							<v8:content>Заявки в работе</v8:content>
+						</v8:item>
+					</Synonym>
+					<Comment/>
+					<Group>NavigationPanelOrdinary</Group>
+					<CommandParameterType/>
+					<ModifiesData>false</ModifiesData>
+				</Properties>
+			</Command>
+			<Command uuid="00000000-0000-4000-8000-000000000004">
+				<Properties>
+					<Name>СоздатьАкт</Name>
+					<Synonym>
+						<v8:item>
+							<v8:lang>ru</v8:lang>
+							<v8:content>Создать акт по заявке</v8:content>
+						</v8:item>
+					</Synonym>
+					<Comment/>
+					<Group>FormCommandBarCreateBasedOn</Group>
+					<CommandParameterType>
+						<v8:Type>cfg:DocumentRef.ЗаявкаНаРемонт</v8:Type>
+					</CommandParameterType>
+					<ModifiesData>false</ModifiesData>
+				</Properties>
+			</Command>
+		</ChildObjects>
 	</Document>
 </MetaDataObject>

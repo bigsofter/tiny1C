@@ -10,6 +10,7 @@
 				</v8:item>
 			</Synonym>
 			<Comment/>
+			<ScriptVariant>Russian</ScriptVariant>
 			<Vendor>tiny1C</Vendor>
 			<Version>0.0.1</Version>
 		</Properties>
@@ -20,13 +21,18 @@
 			<Subsystem>Служебная</Subsystem>
 			<Role>Мастер</Role>
 			<Role>Кладовщик</Role>
+			<CommonCommand>ПечатьЭтикеток</CommonCommand>
+			<CommandGroup>Инструменты</CommandGroup>
+			<FunctionalOption>ИспользоватьДиагностику</FunctionalOption>
 			<Document>ЗаявкаНаРемонт</Document>
 			<Document>АктВыполненныхРабот</Document>
 			<Document>ЛистДиагностики</Document>
 			<Catalog>Велосипеды</Catalog>
 			<Catalog>Запчасти</Catalog>
 			<Catalog>ПричиныОтказа</Catalog>
+			<Catalog>ВидыРабот</Catalog>
 			<Report>ЗагрузкаМастеров</Report>
+			<Report>СводкаРемонтов</Report>
 			<DataProcessor>ПодборЗапчастей</DataProcessor>
 			<AccumulationRegister>ОстаткиЗапчастей</AccumulationRegister>
 			<InformationRegister>НастройкиМастерской</InformationRegister>

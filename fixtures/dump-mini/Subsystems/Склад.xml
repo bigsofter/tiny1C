@@ -1,6 +1,6 @@
 ﻿<?xml version="1.0" encoding="UTF-8"?>
 <MetaDataObject xmlns="http://v8.1c.ru/8.3/MDClasses" xmlns:v8="http://v8.1c.ru/8.1/data/core" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" version="2.16">
-	<Subsystem uuid="00000000-0000-4000-8000-000000000014">
+	<Subsystem uuid="00000000-0000-4000-8000-000000000022">
 		<Properties>
 			<Name>Склад</Name>
 			<Synonym>
@@ -20,6 +20,7 @@
 				<xr:Item xsi:type="xr:MDObjectRef">Catalog.Запчасти</xr:Item>
 				<xr:Item xsi:type="xr:MDObjectRef">AccumulationRegister.ОстаткиЗапчастей</xr:Item>
 				<xr:Item xsi:type="xr:MDObjectRef">DataProcessor.ПодборЗапчастей</xr:Item>
+				<xr:Item xsi:type="xr:MDObjectRef">CommonCommand.ПечатьЭтикеток</xr:Item>
 			</Content>
 		</Properties>
 		<ChildObjects/>

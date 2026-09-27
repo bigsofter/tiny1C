@@ -61,8 +61,8 @@
 	<object>
 		<name>Report.ЗагрузкаМастеров</name>
 		<right>
-			<name>Read</name>
-			<value>false</value>
+			<name>Use</name>
+			<value>true</value>
 		</right>
 		<right>
 			<name>View</name>
