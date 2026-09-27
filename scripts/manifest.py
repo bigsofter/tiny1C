@@ -58,6 +58,9 @@ TOOL_GROUPS = ["introspection", "ops-copy", "debug", "ui", "help"]
 TOOL_EXECUTION = ["offline", "agent-edt", "runner-copy", "runner-ro", "runner-ui"]
 TOOL_DANGER = ["read", "write-copy", "exec-copy"]
 TOOL_STATES = ["реализован", "карточка"]
+# Копилефт-лицензии образца: аббревиатурой (AGPL-3.0, LGPL, GPLv3) или прописью.
+LICENSE_COPYLEFT = re.compile(r"(?i)\b(A?GPL|LGPL)|GNU\s+(Affero\s+|Lesser\s+|Library\s+)?"
+                              r"General\s+Public\s+License")
 
 
 def parse_scalar(raw):
@@ -201,7 +204,7 @@ def collect_tools(rule_ids, errors):
             idea = data.get("идея", "")
             if not isinstance(idea, str) or not idea.strip():
                 errors.append("%s: пустая «идея» — откуда взят инструмент" % rel)
-            elif re.search(r"\b(A?GPL|LGPL)", idea) and "только идея" not in idea:
+            elif LICENSE_COPYLEFT.search(idea) and "только идея" not in idea:
                 errors.append("%s: образец под (A|L)GPL — в «идея» нужна пометка «только идея»"
                               % rel)
             check_source(data, rel, errors)
