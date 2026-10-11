@@ -2,6 +2,9 @@ name: check
 
 on:
   push:
+    # Коммит портала в intake/* приходит без пересобранного манифеста и до fixup
+    # всегда красный; эти ветки проверяет intake.yml на итоговом дереве.
+    branches-ignore: ["intake/**"]
   pull_request:
 
 jobs:

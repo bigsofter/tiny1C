@@ -1,0 +1,123 @@
+name: intake
+
+# Приём правил, пришедших PR-ами из портала TinyCIO (ветки intake/*), и итоговая
+# проверка любого PR в main. Обязательная проверка защиты main — `intake` (и
+# только она): на head PR это check-run самого job'а, на fixup-коммите —
+# check-run, созданный шагом ниже (job на fixup не запускается).
+#
+# Почему не check.yml: правило из портала приходит одним файлом, без
+# пересобранных manifest.json и README. Здесь они пересобираются, проверки
+# гоняются на ИТОГОВОМ дереве, и пересборка коммитится в ветку (fixup). Push
+# токеном GITHUB_TOKEN новых запусков не порождает, поэтому итог проверок
+# публикуется check-run'ом `intake` прямо на SHA fixup-коммита — иначе
+# обязательная проверка на новом head не появилась бы никогда. Без fixup
+# явный check-run не создаётся: два `intake` на одном SHA были бы двусмысленны.
+#
+# Чего здесь нарочно нет:
+#   - `if:` на уровне job (по автору или ветке): пропущенный job засчитывается
+#     обязательной проверкой как пройденный;
+#   - checkout merge-ref: проверяется ровно то дерево, что коммитится (head ветки);
+#   - подстановки ${{ github.head_ref }} в текст скрипта: имя ветки PR из
+#     форка — чужие данные, в скрипт оно попадает только через env.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  checks: write
+
+concurrency:
+  group: intake-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  intake:
+    runs-on: ubuntu-latest
+    env:
+      HEAD_REF: ${{ github.head_ref }}
+      HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+      BASE_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.head_ref }}
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Пересборка манифеста и README, проверки на итоговом дереве
+        id: run
+        shell: bash
+        run: |
+          log="$RUNNER_TEMP/intake.log"
+          : > "$log"
+          status=0
+          step() {
+            local name="$1"; shift
+            echo "::group::$name"
+            if "$@" >>"$log" 2>&1; then echo "ок: $name" | tee -a "$log"
+            else status=1; echo "ПРОВАЛ: $name" | tee -a "$log"; fi
+            echo "::endgroup::"
+          }
+          mcp_tools() {
+            echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+              | python3 mcp/server.py "${@:2}" | python3 -c "import json,sys; \
+                tools=json.loads(sys.stdin.readline())['result']['tools']; \
+                print('инструментов:', len(tools)); sys.exit(0 if len(tools) == $1 else 1)"
+          }
+          step "Сборка manifest.json" python3 scripts/manifest.py
+          step "Счётчики README" python3 scripts/readme-counts.py
+          step "Манифест собран и совпадает с правилами" python3 scripts/manifest.py --проверить
+          step "README совпадает с манифестом" python3 scripts/readme-counts.py --проверить
+          step "Гигиена публикации" python3 scripts/hygiene.py
+          step "MCP-сервер отвечает (7 инструментов)" mcp_tools 7
+          step "С флагом --tools offline инструментов 8" mcp_tools 8 --tools offline
+          step "Инструменты на фикстурах (golden)" python3 scripts/tools-check.py
+          cat "$log"
+
+          own=false
+          [ "$HEAD_REPO" = "$BASE_REPO" ] && own=true
+          if [ "$status" = 0 ] && [ "$own" = true ] && [[ "$HEAD_REF" == intake/* ]] \
+              && [ -n "$(git status --porcelain -- manifest.json README.md)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -- manifest.json README.md
+            git commit -q -m "intake: пересобраны manifest.json и README"
+            if git push -q origin "HEAD:refs/heads/$HEAD_REF"; then
+              echo "fixup: $(git rev-parse HEAD)" | tee -a "$log"
+              echo "fixup=true" >> "$GITHUB_OUTPUT"
+            else
+              status=1; echo "ПРОВАЛ: push fixup-коммита (ветка ушла вперёд?)" | tee -a "$log"
+              git reset -q --hard HEAD~1
+            fi
+          elif [ -n "$(git status --porcelain)" ]; then
+            # Чужая ветка или проверки упали: дерево не коммитим, но расхождение — провал.
+            git status --porcelain | tee -a "$log"
+            [ "$status" = 0 ] && { status=1; echo "ПРОВАЛ: манифест или README не пересобраны в ветке" | tee -a "$log"; }
+          fi
+
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+      - name: Check-run intake на fixup-коммите
+        # Fixup бывает только в своей ветке intake/* (у форка токен на чтение, push невозможен).
+        if: steps.run.outputs.fixup == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.run.outputs.sha }}
+        run: |
+          # fixup коммитится только при зелёных проверках
+          conclusion=success; title="intake: проверки прошли на пересобранном дереве"
+          tail -c 60000 "$RUNNER_TEMP/intake.log" > "$RUNNER_TEMP/summary.txt"
+          gh api "repos/$BASE_REPO/check-runs" -X POST \
+            -f name=intake -f head_sha="$SHA" -f status=completed -f conclusion="$conclusion" \
+            -f "output[title]=$title" -F "output[summary]=@$RUNNER_TEMP/summary.txt" >/dev/null
+          echo "check-run intake=$conclusion на $SHA"
+      - name: Итог
+        shell: bash
+        env:
+          STATUS: ${{ steps.run.outputs.status }}
+        run: test "$STATUS" = 0
