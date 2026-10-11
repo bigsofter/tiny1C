@@ -48,6 +48,15 @@ class ServerTools(unittest.TestCase):
             self.assertEqual(8, len(names), (args, env))
             self.assertEqual("where_is", names[-1])
 
+    def test_checklist_knows_external_processors(self):
+        # Внешние обработки и отчёты (.epf/.erf) - своя категория плюс общие для модулей, форм и макетов.
+        for name in ("Печать.epf", "Отчет.ERF"):
+            answer = call([{"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                            "params": {"name": "checklist", "arguments": {"file": name}}}])[0]
+            result = json.loads(answer["result"]["content"][0]["text"])
+            self.assertEqual("дополнительные-отчеты-и-обработки", result["категории"][0], name)
+            self.assertIn("макеты", result["категории"], name)
+
     def test_where_is_is_read_only(self):
         answer = call([{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}],
                       ("--tools", "offline"))[0]

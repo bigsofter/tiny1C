@@ -86,7 +86,7 @@ scripts/export.py --направление core,greenfield --выход dist/rul
 | `get_rule` | полный текст правила |
 | `rules_by_category` | все правила категории (запросы, формы-xml, метаданные…) |
 | `rules_for_object` | что известно про объект метаданных: правила и термины |
-| `checklist` | что проверить **перед** правкой файла `.bsl`, `.form`, `.mdo`, `.mxlx` |
+| `checklist` | что проверить **перед** правкой файла `.bsl`, `.form`, `.mdo`, `.mxlx`, `.epf`, `.erf` |
 | `glossary_lookup` | термин предметной области → определение и объекты |
 
 Плюс ресурс `tiny1c://manifest` — весь набор одним JSON.
