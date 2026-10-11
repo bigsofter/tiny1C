@@ -48,7 +48,7 @@ CHECKS = ["lint", "checkconfig", "checkconfig-ext", "smoke-forms", "smoke-sample
 RULE_REQUIRED = ["id", "направление", "категория", "серьёзность", "платформы",
                  "заголовок", "ключи", "источник", "check"]
 TRACK_REQUIRED = ["код", "название", "вид", "платформы", "статус"]
-TRACK_KINDS = ["ядро", "с-нуля", "типовая"]
+TRACK_KINDS = ["ядро", "с-нуля", "типовая", "собственная"]
 TRACK_STATES = ["ведётся", "открыто"]
 
 TOOLS_DIR = os.path.join(ROOT, "tools")
