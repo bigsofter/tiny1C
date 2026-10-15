@@ -57,6 +57,17 @@ class ServerTools(unittest.TestCase):
             self.assertEqual("дополнительные-отчеты-и-обработки", result["категории"][0], name)
             self.assertIn("макеты", result["категории"], name)
 
+    def test_checklist_knows_extensions(self):
+        # Расширения конфигурации: .cfe и файлы выгрузки Конфигуратора (.xml) тянут категорию «расширения».
+        for name, first in (("Доработки.cfe", "расширения"), ("Configuration.xml", None)):
+            answer = call([{"jsonrpc": "2.0", "id": 4, "method": "tools/call",
+                            "params": {"name": "checklist", "arguments": {"file": name}}}])[0]
+            result = json.loads(answer["result"]["content"][0]["text"])
+            self.assertIn("расширения", result["категории"], name)
+            if first:
+                self.assertEqual(first, result["категории"][0], name)
+            self.assertTrue(any(rule["id"].startswith("ext-") for rule in result["правила"]), name)
+
     def test_where_is_is_read_only(self):
         answer = call([{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}],
                       ("--tools", "offline"))[0]
