@@ -34,6 +34,7 @@
 import json
 import os
 import re
+import stat as stat_module
 import xml.etree.ElementTree as ET
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -150,7 +151,10 @@ class UnsafeXml(ValueError):
 
 def read_chunks(path, size_hint=CHUNK):
     """Байты файла порциями: без BOM, с отказом на DTD/сущностях и сверхразмере."""
-    size = os.stat(path).st_size
+    info = os.stat(path)
+    if not stat_module.S_ISREG(info.st_mode):
+        raise UnsafeXml("не обычный файл (канал, устройство): читать нельзя")
+    size = info.st_size
     if size > MAX_FILE_BYTES:
         raise UnsafeXml("файл больше предела %d байт (%d байт)" % (MAX_FILE_BYTES, size))
     tail = b""

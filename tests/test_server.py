@@ -57,6 +57,17 @@ class ServerTools(unittest.TestCase):
             self.assertEqual("дополнительные-отчеты-и-обработки", result["категории"][0], name)
             self.assertIn("макеты", result["категории"], name)
 
+    def test_checklist_knows_extensions(self):
+        # Расширения конфигурации: .cfe и файлы выгрузки Конфигуратора (.xml) тянут категорию «расширения».
+        for name, first in (("Доработки.cfe", "расширения"), ("Configuration.xml", None)):
+            answer = call([{"jsonrpc": "2.0", "id": 4, "method": "tools/call",
+                            "params": {"name": "checklist", "arguments": {"file": name}}}])[0]
+            result = json.loads(answer["result"]["content"][0]["text"])
+            self.assertIn("расширения", result["категории"], name)
+            if first:
+                self.assertEqual(first, result["категории"][0], name)
+            self.assertTrue(any(rule["id"].startswith("ext-") for rule in result["правила"]), name)
+
     def test_where_is_is_read_only(self):
         answer = call([{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}],
                       ("--tools", "offline"))[0]
@@ -79,6 +90,62 @@ class ServerTools(unittest.TestCase):
         answer = where_is({"dump": os.path.join(FIXTURE, ".."), "query": "акт"})
         result = json.loads(answer["result"]["content"][0]["text"])
         self.assertIn("Configuration.xml", result["ошибка"])
+
+    def test_cp1251_locale_does_not_break_cyrillic(self):
+        # Windows: pipe-кодировка процесса - cp1251. Сервер обязан читать и писать UTF-8 всё равно.
+        request = [{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                    "params": {"name": "lookup_rule", "arguments": {"query": "шапка"}}}]
+        counts = []
+        for env in (None, {"PYTHONIOENCODING": "cp1251"}, {"PYTHONIOENCODING": "cp1251",
+                                                           "PYTHONUTF8": "0"}):
+            answer = call(request, env=env)[0]
+            counts.append(json.loads(answer["result"]["content"][0]["text"]))
+        self.assertGreaterEqual(counts[0]["найдено"], 2)
+        self.assertEqual(counts[0], counts[1])
+        self.assertEqual(counts[0], counts[2])
+
+    def test_initialize_has_instructions_and_hash_version(self):
+        answer = call([{"jsonrpc": "2.0", "id": 1, "method": "initialize"}])[0]["result"]
+        lines = answer["instructions"].splitlines()
+        self.assertTrue(8 <= len(lines) <= 12, len(lines))
+        self.assertIn("checklist", answer["instructions"])
+        self.assertRegex(answer["serverInfo"]["version"], r"^[0-9a-f]{12}$")
+        again = call([{"jsonrpc": "2.0", "id": 1, "method": "initialize"}])[0]["result"]
+        self.assertEqual(answer["serverInfo"]["version"], again["serverInfo"]["version"])
+
+    def test_tool_errors_are_is_error_not_rpc_error(self):
+        for name, arguments in (("lookup_rule", {"query": ""}), ("get_rule", {"id": "нет-999"}),
+                                ("checklist", {"file": "a.unknown"})):
+            answer = call([{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                            "params": {"name": name, "arguments": arguments}}])[0]
+            self.assertNotIn("error", answer, name)
+            self.assertTrue(answer["result"]["isError"], name)
+        ok = call([{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                    "params": {"name": "get_rule", "arguments": {"id": "bsl-006"}}}])[0]
+        self.assertNotIn("isError", ok["result"])
+
+    def test_unknown_protocol_method_stays_rpc_error(self):
+        answer = call([{"jsonrpc": "2.0", "id": 1, "method": "нет/такого"}])[0]
+        self.assertIn("error", answer)
+
+    def test_checklist_compact(self):
+        def run(arguments):
+            answer = call([{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                            "params": {"name": "checklist", "arguments": arguments}}])[0]
+            return json.loads(answer["result"]["content"][0]["text"])
+        full, compact = run({"file": "a.bsl"}), run({"file": "a.bsl", "compact": True})
+        self.assertEqual(full["найдено"], compact["найдено"])
+        self.assertEqual({"id", "заголовок", "серьёзность"}, set(compact["правила"][0]))
+        self.assertIn("источник", full["правила"][0])
+        self.assertEqual(full["правила"][0]["id"], compact["правила"][0]["id"])
+
+    def test_manifest_resource_is_short(self):
+        answer = call([{"jsonrpc": "2.0", "id": 1, "method": "resources/read",
+                        "params": {"uri": "tiny1c://manifest"}}])[0]
+        text = answer["result"]["contents"][0]["text"]
+        self.assertLess(len(text), 60000)
+        self.assertNotIn("симптом", text)
+        self.assertNotIn("глоссарий", text)
 
 
 if __name__ == "__main__":

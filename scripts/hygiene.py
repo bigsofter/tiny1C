@@ -26,10 +26,14 @@
 самой находки.
 
 Использование:
-  scripts/hygiene.py            проверить дерево (1 при находках)
-  scripts/hygiene.py --список   показать, что именно ищется
+  scripts/hygiene.py                проверить дерево (1 при находках)
+  scripts/hygiene.py --список       показать, что именно ищется
+  scripts/hygiene.py --файл путь    проверить один файл правила вне дерева (черновик,
+                                    «конверт»): формат и словари как у манифеста, те же
+                                    образцы приватного, плюс почта и ИНН; исключений нет
 """
 
+import importlib.util
 import json
 import os
 import re
@@ -90,6 +94,8 @@ def walk():
         dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
         for name in sorted(files):
             path = os.path.join(current, name)
+            if name in SKIP_DIRS:
+                continue  # «.git» в рабочем дереве worktree - файл-указатель с путём машины
             if path == ALLOW_FILE:
                 continue  # файл исключений по определению перечисляет искомые маркеры
             yield path, os.path.relpath(path, ROOT)
@@ -190,7 +196,89 @@ def check_readme(findings):
                              "направления «%s» в наборе нет" % code))
 
 
+# Только для --файл: черновик пишет человек, а не портал, и в нём бывает больше личного.
+FILE_ONLY_PATTERNS = [
+    ("почта", r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "адрес электронной почты"),
+    ("инн", r"(?i)\bинн\b\D{0,5}\d{10,12}\b", "ИНН"),
+    ("адрес-базы", r"(?i)https?://[^\s)]+/(?:ws|hs|odata|e1cib)/", "адрес базы 1С"),
+]
+
+
+def check_one_file(path):
+    """Проверка одного файла правила вне дерева. Возвращает число находок."""
+    findings = []
+    try:
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+    except (OSError, UnicodeDecodeError) as error:
+        print("Гигиена: файл не читается как UTF-8: %s" % error)
+        return 1
+    lines = text.split("\n")
+    for number, line in enumerate(lines, 1):
+        for name, pattern, note in PATTERNS + FILE_ONLY_PATTERNS:
+            if re.search(pattern, line):
+                findings.append((number, name, note))
+
+    spec = importlib.util.spec_from_file_location(
+        "tiny1c_manifest_for_hygiene", os.path.join(ROOT, "scripts", "manifest.py"))
+    manifest = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(manifest)
+    data, body = manifest.read_document(path)
+    problems = []
+    if data is None:
+        problems.append("нет фронтматтера (--- ... --- в начале файла)")
+    else:
+        for field in manifest.RULE_REQUIRED:
+            if field not in data:
+                problems.append("нет поля «%s»" % field)
+        rule_id = data.get("id", "")
+        if not re.match(r"^[a-z]+-(\d{3}|XXX)$", str(rule_id)):
+            problems.append("id «%s» не по формату «тема-001» или «тема-XXX»" % rule_id)
+        if data.get("категория") not in manifest.CATEGORIES:
+            problems.append("неизвестная категория «%s»" % data.get("категория"))
+        if data.get("серьёзность") not in manifest.SEVERITIES:
+            problems.append("неизвестная серьёзность «%s»" % data.get("серьёзность"))
+        platforms = data.get("платформы", [])
+        if not isinstance(platforms, list) or not platforms:
+            problems.append("платформы должны быть непустым списком")
+        else:
+            for platform in platforms:
+                if platform not in manifest.PLATFORMS:
+                    problems.append("неизвестная платформа «%s»" % platform)
+        for field in ("заголовок",):
+            if not str(data.get(field, "")).strip():
+                problems.append("пустой «%s»" % field)
+        if not data.get("ключи"):
+            problems.append("пустые «ключи» - по ним правило ищут")
+        manifest.check_source(data, "файл", problems)
+        manifest.check_checks(data, "файл", problems)
+        source = str(data.get("источник", ""))
+        if not re.search(r"\d{4}-\d{2}", source) and not source.startswith("документация:"):
+            print("  совет: в источнике нет даты (ГГГГ-ММ-ДД) - по ней правило проверяют позже")
+        # Разделы шаблона в наборе соблюдаются не везде - это совет, а не провал.
+        for heading in ("Симптом", "Причина", "Правило", "Как проверить"):
+            if not re.search(r"(?m)^## %s\s*$" % heading, body):
+                print("  совет: нет раздела «## %s» (шаблон tracks/_TEMPLATE.md)" % heading)
+    for problem in problems:
+        findings.append((0, "формат", problem))
+
+    if not findings:
+        print("Гигиена (файл): чисто.")
+        return 0
+    print("Гигиена (файл): находок %d" % len(findings))
+    for number, name, note in findings:
+        place = "строка %d" % number if number else "файл"
+        print("  %-10s %-22s %s" % (place, name, note))
+    return 1
+
+
 def main():
+    if "--файл" in sys.argv[1:]:
+        position = sys.argv.index("--файл")
+        if position + 1 >= len(sys.argv):
+            print("--файл требует путь к файлу")
+            return 2
+        return 1 if check_one_file(sys.argv[position + 1]) else 0
     if "--список" in sys.argv[1:]:
         print("Проверки гигиены:")
         for name, _, note in PATTERNS:
