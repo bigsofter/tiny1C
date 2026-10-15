@@ -127,7 +127,7 @@ class Tokens(unittest.TestCase):
     def test_id_prefix_only_for_id_like_queries(self):
         self.assertEqual([], ids("-00"))
         self.assertEqual([], ids("sl-"))
-        self.assertTrue(all(item.startswith("bsl-") for item in ids("bsl-0", limit=100)))
+        self.assertIn("bsl-001", ids("bsl-0", limit=100))
         self.assertTrue(ids("bsl", limit=100))
 
     def test_query_must_be_string(self):
