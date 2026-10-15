@@ -111,6 +111,21 @@ def read_document(path):
     return data, "\n".join(lines[end + 1:])
 
 
+SYMPTOM_LIMIT = 700
+
+
+def read_symptom(body):
+    """Текст раздела «## Симптом» (пробелы схлопнуты, не длиннее SYMPTOM_LIMIT) или пустая строка.
+
+    Для поиска lookup_rule: по дословному тексту ошибки правило находят чаще, чем
+    по заголовку. Поле вычисляется из тела и во фронтматтер не пишется.
+    """
+    match = re.search(r"(?m)^## Симптом[ \t]*\n(.*?)(?=^## |\Z)", body, re.S)
+    if not match:
+        return ""
+    return " ".join(match.group(1).split())[:SYMPTOM_LIMIT]
+
+
 def read_glossary(path):
     """Глоссарий: строки markdown-таблицы термин | синонимы | объекты | пояснение."""
     terms = []
@@ -261,7 +276,7 @@ def collect():
             for name in sorted(os.listdir(rules_dir)):
                 if not name.endswith(".md") or name == "README.md":
                     continue
-                data, _ = read_document(os.path.join(rules_dir, name))
+                data, body = read_document(os.path.join(rules_dir, name))
                 if data is None:
                     errors.append("%s/%s: нет фронтматтера" % (code, name))
                     continue
@@ -292,6 +307,9 @@ def collect():
                 check_source(data, where, errors)
                 checks = check_checks(data, where, errors)
                 rule = dict(data)
+                symptom = read_symptom(body)
+                if symptom:
+                    rule["симптом"] = symptom
                 rule["файл"] = "tracks/%s/rules/%s" % (code, name)
                 rule["виды_проверок"] = sorted({entry.split(":", 1)[0] for entry in checks})
                 rules.append(rule)
