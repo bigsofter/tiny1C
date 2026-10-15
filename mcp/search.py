@@ -3,7 +3,7 @@
 
 Только stdlib. Запрос и тексты приводятся к одному виду (регистр, е=ё,
 пунктуация и скобки отброшены), режутся на слова, у русских слов отбрасывается
-типичное окончание — «шапка», «шапки» и «шапок» сходятся к одной основе.
+типичное окончание — «шапка», «шапки» и «поле», «поля», «полей» сходятся к одной основе.
 
 Порядок важности полей: id (точное совпадение) > заголовок > ключи > симптом
 (раздел «## Симптом», вычисляется манифестом) > тело правила. Правило попадает
@@ -14,6 +14,7 @@
 
 import re
 
+ID_PREFIX = re.compile(r"^[a-z]{3,}(-\d*)?$")  # тема (bsl, forms) или тема с началом номера (bsl-0)
 WORD = re.compile(r"[0-9a-zа-я]+")
 
 STOPWORDS = {
@@ -43,7 +44,7 @@ def fold(text):
 
 def stem(word):
     """Лёгкая обрезка русского окончания; латиница и числа не трогаются."""
-    if not re.match(r"^[а-я]+$", word) or len(word) < 5:
+    if not re.match(r"^[а-я]+$", word) or len(word) < 4:
         return word
     for ending in ENDINGS:
         if word.endswith(ending) and len(word) - len(ending) >= 3:
@@ -157,8 +158,8 @@ class Index:
         scored = []
         for entry in entries:
             found, score = self._score(entry, query_tokens, phrase, False)
-            if len(raw) >= 3 and raw in entry["rule"]["id"].lower():
-                found, score = total, score + WEIGHTS["id"]  # часть id: bsl-0, forms
+            if ID_PREFIX.match(raw) and entry["rule"]["id"].lower().startswith(raw):
+                found, score = total, score + WEIGHTS["id"]  # начало id: bsl, bsl-0, forms
             if found == total:
                 scored.append((score, entry))
         if scored:

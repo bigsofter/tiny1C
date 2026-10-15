@@ -117,6 +117,24 @@ class Tokens(unittest.TestCase):
         self.assertEqual(search.tokens("Документы"), search.tokens("(документы)"))
         self.assertEqual(["естьnull"], search.tokens("ЕстьNULL"))
 
+    def test_short_words_share_stem(self):
+        self.assertEqual(search.stem("поле"), search.stem("поля"))
+        self.assertEqual(search.stem("поле"), search.stem("полей"))
+        for word in ("тип", "код", "вид"):  # трёхбуквенные слова не режутся
+            self.assertEqual(word, search.stem(word))
+        self.assertNotEqual(search.stem("тип"), search.stem("тела"))
+
+    def test_id_prefix_only_for_id_like_queries(self):
+        self.assertEqual([], ids("-00"))
+        self.assertEqual([], ids("sl-"))
+        self.assertTrue(all(item.startswith("bsl-") for item in ids("bsl-0", limit=100)))
+        self.assertTrue(ids("bsl", limit=100))
+
+    def test_query_must_be_string(self):
+        for bad in (["a"], 5, {"x": 1}):
+            result = server.tool_lookup_rule(MANIFEST, {"query": bad})
+            self.assertIn("строкой", result["ошибка"])
+
     def test_latin_and_digits_are_kept(self):
         self.assertEqual(["bsl", "006"], search.tokens("bsl-006"))
 

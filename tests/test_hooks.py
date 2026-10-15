@@ -50,19 +50,34 @@ class Hooks(unittest.TestCase):
         os.makedirs(os.path.join(dump, "Documents"))
         self.assertIsNotNone(self.edit(os.path.join(dump, "Documents", "Акт.xml")))
 
-    def test_stop_only_after_edits_and_once(self):
-        stop = {"session_id": "s1", "hook_event_name": "Stop"}
-        self.assertIsNone(self.run_hook(stop))
-        self.edit("/p/a.bsl")
-        answer = self.run_hook(stop)
-        self.assertIn("/1c:propose-rule", answer["hookSpecificOutput"]["additionalContext"])
-        self.assertEqual("Stop", answer["hookSpecificOutput"]["hookEventName"])
-        self.assertIsNone(self.run_hook(stop))
+    def test_propose_hint_only_on_first_edit(self):
+        first = self.edit("/p/a.bsl")["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("/1c:propose-rule", first)
+        second = self.edit("/p/Form.form")["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("checklist", second)
+        self.assertNotIn("/1c:propose-rule", second)
 
-    def test_stop_hook_active_is_silent(self):
+    def test_stop_event_is_ignored(self):
         self.edit("/p/a.bsl")
-        self.assertIsNone(self.run_hook({"session_id": "s1", "hook_event_name": "Stop",
-                                         "stop_hook_active": True}))
+        self.assertIsNone(self.run_hook({"session_id": "s1", "hook_event_name": "Stop"}))
+
+    def test_xml_needs_dump_markers(self):
+        plain = os.path.join(self.data, "app", "templates")
+        os.makedirs(plain)
+        self.assertIsNone(self.edit(os.path.join(plain, "mail.xml")))
+        dump = os.path.join(self.data, "dump")
+        os.makedirs(os.path.join(dump, "Reports", "Отчет", "Templates"))
+        target = os.path.join(dump, "Reports", "Отчет", "Templates", "Макет.xml")
+        self.assertIsNone(self.edit(target))
+        open(os.path.join(dump, "Configuration.xml"), "w").close()
+        self.assertIsNotNone(self.edit(target, session="s3"))
+
+    def test_foreign_state_file_is_survived(self):
+        state_dir = os.path.join(self.data, "state")
+        os.makedirs(state_dir)
+        with open(os.path.join(state_dir, "s9.json"), "w") as handle:
+            json.dump({"other": 1}, handle)
+        self.assertIsNotNone(self.edit("/p/a.bsl", session="s9"))
 
     def test_garbage_is_silent(self):
         for raw in (b"", b"not json", b"[]", b'{"session_id": 5}', b"\xff\xfe"):
@@ -71,13 +86,11 @@ class Hooks(unittest.TestCase):
     def test_hooks_json_is_valid(self):
         with open(os.path.join(ROOT, "hooks", "hooks.json"), encoding="utf-8") as handle:
             config = json.load(handle)["hooks"]
-        self.assertEqual({"PreToolUse", "Stop"}, set(config))
+        self.assertEqual({"PreToolUse"}, set(config))
         self.assertEqual("Edit|Write|MultiEdit", config["PreToolUse"][0]["matcher"])
-        for event in config.values():
-            command = event[0]["hooks"][0]["command"]
-            self.assertIn("${CLAUDE_PLUGIN_ROOT}/hooks/remind.py", command)
-            self.assertIn("python3", command)
-            self.assertIn("python ", command)
+        hook = config["PreToolUse"][0]["hooks"][0]
+        self.assertEqual("python3", hook["command"])  # как у MCP-сервера плагина, без оболочки и ||
+        self.assertEqual(["${CLAUDE_PLUGIN_ROOT}/hooks/remind.py"], hook["args"])
 
 
 if __name__ == "__main__":

@@ -6,18 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/remind.py\" || python \"${CLAUDE_PLUGIN_ROOT}/hooks/remind.py\"",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/remind.py\" || python \"${CLAUDE_PLUGIN_ROOT}/hooks/remind.py\"",
+            "command": "python3",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/remind.py"],
             "timeout": 5
           }
         ]

@@ -101,9 +101,11 @@ class PortalContract(unittest.TestCase):
 
     def test_intake_workflow_names(self):
         text = read(".github", "workflows", "intake.yml")
-        self.assertRegex(text, r"(?m)^jobs:\n  intake:\n")
+        self.assertRegex(text, r"(?m)^jobs:\n  intake:\s*$")
         self.assertIn("intake/*", text)
-        self.assertIn("name=intake", text)  # check-run на fixup-коммите
+        code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+        # check-run на fixup-коммите: вызов с -f name=intake вне комментариев
+        self.assertRegex(code, r"check-runs[^\n]*\n(?:[^\n]*\n)?[^\n]*-f name=intake\b")
 
 
 if __name__ == "__main__":

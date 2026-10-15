@@ -248,7 +248,10 @@ def rule_index(manifest):
 
 
 def tool_lookup_rule(manifest, args):
-    query = (args.get("query") or "").strip()
+    query = args.get("query")
+    if query is not None and not isinstance(query, str):
+        return {"ошибка": "query должен быть строкой: текст ошибки 1С, ключевое слово или id правила"}
+    query = (query or "").strip()
     if not query:
         return {"ошибка": "нужен запрос: текст ошибки 1С, ключевое слово или id правила"}
     try:
