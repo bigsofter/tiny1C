@@ -32,9 +32,57 @@ claude plugin install 1c@tinycio
 `/reload-plugins` либо новая сессия.
 
 ```bash
-claude plugin update 1c        # обновить
-claude plugin uninstall 1c     # убрать
+claude plugin update 1c@tinycio   # обновить
+claude plugin uninstall 1c        # убрать
 ```
+
+**Как обновляется.** У плагина нет поля `version`, поэтому версия плагина -
+12 символов коммита `main`: каждое слияние правил в `main` считается новой
+версией (с зафиксированным `version` Claude Code оставлял бы всех на копии дня
+установки). Фоновое автообновление у сторонних маркетплейсов выключено, и в
+`marketplace.json` включить его нельзя. Варианты:
+
+1. один раз `/plugin` - Marketplaces - `tinycio` - Enable auto-update: набор
+   подтягивается в начале сессии, применяется после `/reload-plugins` или при
+   следующем запуске;
+2. вручную `claude plugin update 1c@tinycio` (после него - `/reload-plugins`);
+3. администратору, для всех сразу, в managed settings:
+
+```json
+{"extraKnownMarketplaces": {"tinycio": {"source": {"source": "github",
+  "repo": "bigsofter/tiny1C"}, "autoUpdate": true}}}
+```
+
+Свежесть видно в ответе сервера: `serverInfo.version` в `initialize` - короткий
+хеш `manifest.json`; у двух машин с одним набором он совпадает.
+
+**Что приносит плагин.** MCP-сервер `tiny1c` (с `TINY1C_TOOLS=offline`, то есть
+вместе с `where_is`), скилл `/1c:1c` (когда и как звать инструменты), скилл
+`/1c:propose-rule` (предложить новое правило: кандидаты из задачи, шаблон,
+проверка гигиены, «конверт» по CONTRIBUTING) и мягкие хуки (`hooks/hooks.json`):
+перед правкой `.bsl`, `.form`, `.mdo`, `.mxlx` и XML выгрузки - одно напоминание
+вызвать `checklist` (раз на расширение за сессию), в конце сессии - одно
+напоминание про `/1c:propose-rule`. Хуки ничего не блокируют и при любой ошибке
+молча выходят. Отключить - `/plugin`, или убрать `hooks/hooks.json`.
+
+### Windows
+
+- Сервер и хуки пишет и читает UTF-8 независимо от кодировки консоли
+  (`PYTHONUTF8=1` в плагине плюс принудительный UTF-8 у stdin/stdout внутри
+  `server.py`): кириллический запрос не превращается в мусор.
+- Команда сервера в плагине - `python3`. У установщика с python.org на Windows
+  такого файла нет (есть `python` и `py`), а «заглушка» `python3.exe` из
+  Microsoft Store без установленного Python открывает магазин. Если в `/mcp`
+  сервер `tiny1c` - failed, создайте `python3` (например, скопируйте
+  `python.exe` под этим именем в каталог из `PATH`) либо подключите сервер
+  вручную через `.mcp.json` с `"command": "python"` или `"py"`
+  (`"args": ["-3", ".../mcp/server.py"]`), а плагин используйте ради скиллов.
+- Хуки запускаются как `python3 ... || python ...`: оболочка хука на Windows -
+  Git Bash (ставится вместе с Git for Windows; без него Claude Code берёт
+  PowerShell, где `||` не работает до версии 7, и хук просто не сработает -
+  ничего не сломается).
+- Проверено без Windows: кодировка - имитацией `PYTHONIOENCODING=cp1251` в тесте;
+  запуск на реальной Windows не проверялся.
 
 ### Клоном и файлом проекта
 
@@ -133,7 +181,7 @@ Cursor, VS Code, Cline, Continue, Zed, LibreChat и другие читают с
 echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | python3 mcp/server.py
 ```
 
-В ответ должен прийти JSON с семью инструментами.
+В ответ должен прийти JSON с семью инструментами (с `--tools offline` - с восемью).
 
 ---
 
@@ -170,7 +218,7 @@ scripts/export.py --полный --платформа 8.3 --выход dist/rule
 
 | Способ подключения | Обновление |
 |---|---|
-| плагин Claude Code | `claude plugin update 1c` |
+| плагин Claude Code | автообновление маркетплейса (включить один раз) или `claude plugin update 1c@tinycio` |
 | клон | `git pull` в каталоге клона |
 | выгрузка текстом | повторный `scripts/export.py` |
 

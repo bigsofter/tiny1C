@@ -90,6 +90,8 @@ def walk():
         dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
         for name in sorted(files):
             path = os.path.join(current, name)
+            if name in SKIP_DIRS:
+                continue  # «.git» в рабочем дереве worktree - файл-указатель с путём машины
             if path == ALLOW_FILE:
                 continue  # файл исключений по определению перечисляет искомые маркеры
             yield path, os.path.relpath(path, ROOT)
