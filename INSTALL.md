@@ -58,7 +58,7 @@ claude plugin uninstall 1c        # убрать
 
 **Что приносит плагин.** MCP-сервер `tiny1c` (с `TINY1C_TOOLS=offline`, то есть
 вместе с `where_is`), скилл `/1c:1c` (когда и как звать инструменты), скилл
-`/1c:propose-rule` (предложить новое правило: кандидаты из задачи, шаблон,
+`/1c:propose-rule` (предложить новое правило или рецепт: кандидаты из задачи, шаблон,
 проверка гигиены, «конверт» по CONTRIBUTING) и мягкий хук (`hooks/hooks.json`):
 перед правкой `.bsl`, `.form`, `.mdo`, `.mxlx` и XML выгрузки - одно напоминание
 вызвать `checklist` (раз на расширение за сессию); при первой правке за сессию к
@@ -156,7 +156,7 @@ Harness подключает MCP плагином `@deepseek-ai/dsh-mcp-client` 
 ```
 
 Инструменты появятся под именами `mcp__tiny1c__lookup_rule`,
-`mcp__tiny1c__checklist` и так далее. `serverName` менять не стоит: от него
+`mcp__tiny1c__lookup_guide`, `mcp__tiny1c__checklist` и так далее. `serverName` менять не стоит: от него
 зависят имена всех инструментов.
 
 Проверка, что сервер поднялся:
@@ -187,7 +187,7 @@ Cursor, VS Code, Cline, Continue, Zed, LibreChat и другие читают с
 echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | python3 mcp/server.py
 ```
 
-В ответ должен прийти JSON с семью инструментами (с `--tools offline` - с восемью).
+В ответ должен прийти JSON с девятью инструментами (с `--tools offline` - с десятью).
 
 ---
 

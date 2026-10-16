@@ -18,8 +18,8 @@
 
 Исполняемые инструменты (разбор XML-выгрузки конфигурации, сейчас where_is)
 включаются явно — флагом `--tools offline` или переменной окружения
-`TINY1C_TOOLS=offline`. Без них сервер отдаёт только 7 инструментов правил,
-как раньше. Инструмент попадает в tools/list, только если его карточка в
+`TINY1C_TOOLS=offline`. Без них сервер отдаёт только 9 инструментов правил и
+рецептов. Инструмент попадает в tools/list, только если его карточка в
 manifest.json имеет статус «реализован» (а значит, и проверку-фикстуру).
 """
 
@@ -148,6 +148,35 @@ TOOLS = [
             "required": ["term"],
         },
     },
+    {
+        "name": "lookup_guide",
+        "description": "Поиск рецептов «как сделать»: задача, ключевое слово или id (how-001). "
+                       "Для вопросов «как собрать/загрузить/проверить X», не для текста ошибки "
+                       "(ошибка — lookup_rule). Возвращает карточки без шагов — текст брать "
+                       "get_guide. Пустой запрос — ошибка.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "задача, ключевое слово или id рецепта"},
+                "track": {"type": "string", "description": "код направления, например core"},
+                "platform": {"type": "string", "description": "8.3 или 8.5"},
+                "category": {"type": "string", "description": "категория, например расширения"},
+                "limit": {"type": "integer",
+                          "description": "сколько карточек вернуть (по умолчанию 20, не больше 100)"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "get_guide",
+        "description": "Полный текст рецепта по id: задача, шаги, проверка результата, где "
+                       "ломается, ссылки на правила (поле «правила» — открывать get_rule).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"id": {"type": "string"}},
+            "required": ["id"],
+        },
+    },
 ]
 
 # Группа «offline»: работают по выгрузке конфигурации на диске, базу не трогают.
@@ -205,12 +234,26 @@ def rule_card(rule):
     }
 
 
+def guide_card(guide):
+    return {
+        "id": guide["id"],
+        "направление": guide["направление"],
+        "категория": guide["категория"],
+        "платформы": guide.get("платформы", []),
+        "заголовок": guide["заголовок"],
+        "задача": guide.get("задача", ""),
+        "чем_ловится": guide.get("check", []),
+        "источник": guide.get("источник", ""),
+        "правила": guide.get("правила", []),
+    }
+
+
 def matches(rule, track=None, platform=None, severity=None):
     if track and rule["направление"] != track:
         return False
     if platform and platform not in rule.get("платформы", []):
         return False
-    if severity and SEVERITY_ORDER.get(rule["серьёзность"], 9) > SEVERITY_ORDER.get(severity, 9):
+    if severity and SEVERITY_ORDER.get(rule.get("серьёзность"), 9) > SEVERITY_ORDER.get(severity, 9):
         return False
     return True
 
@@ -224,6 +267,7 @@ def tool_list_tracks(manifest, _args):
         "конфигурации": track.get("конфигурации", []),
         "платформы": track.get("платформы", []),
         "правил": track["правил"],
+        "рецептов": track.get("рецептов", 0),
         "терминов": track["терминов"],
         "карта_объектов": track.get("карта_объектов"),
     } for track in manifest["направления"]]
@@ -239,12 +283,33 @@ def read_rule_body(rule):
         return handle.read()
 
 
-def rule_index(manifest):
+read_guide_body = read_rule_body  # рецепт читается так же: запись манифеста с полем «файл»
+
+
+def _index_cell(manifest):
+    """Ячейка кэша индексов для этого манифеста; кэш сбрасывается только при смене манифеста."""
     key = id(manifest)
-    if key not in INDEXES:
+    if INDEXES.get("manifest") != key:
         INDEXES.clear()
-        INDEXES[key] = search.Index(manifest["правила"], read_rule_body)
-    return INDEXES[key]
+        INDEXES["manifest"] = key
+        INDEXES["rules"] = None
+        INDEXES["guides"] = None
+    return INDEXES
+
+
+def rule_index(manifest):
+    cell = _index_cell(manifest)
+    if cell["rules"] is None:
+        cell["rules"] = search.Index(manifest["правила"], read_rule_body)
+    return cell["rules"]
+
+
+def guide_index(manifest):
+    cell = _index_cell(manifest)
+    if cell["guides"] is None:
+        cell["guides"] = search.Index(manifest.get("рецепты", []), read_guide_body,
+                                      text_key="задача")
+    return cell["guides"]
 
 
 def tool_lookup_rule(manifest, args):
@@ -272,6 +337,52 @@ def tool_lookup_rule(manifest, args):
                            if mode == "по тексту"
                            else "частичное совпадение: нашлись не все слова запроса")
     return result
+
+
+def tool_lookup_guide(manifest, args):
+    query = args.get("query")
+    if query is not None and not isinstance(query, str):
+        return {"ошибка": "query должен быть строкой: задача, ключевое слово или id рецепта"}
+    query = (query or "").strip()
+    if not query:
+        return {"ошибка": "нужен запрос: задача, ключевое слово или id рецепта"}
+    try:
+        limit = int(args.get("limit") or DEFAULT_LIMIT)
+    except (TypeError, ValueError):
+        limit = DEFAULT_LIMIT
+    limit = max(1, min(limit, MAX_LIMIT))
+    category = args.get("category")
+
+    def accept(guide):
+        if category and guide["категория"] != category:
+            return False
+        return matches(guide, args.get("track"), args.get("platform"))
+
+    guides, mode = guide_index(manifest).search(query, accept)
+    result = {"найдено": len(guides), "рецепты": [guide_card(guide) for guide in guides[:limit]]}
+    if len(guides) > limit:
+        result["показано"] = limit
+    if mode != "точный" and guides:
+        result["режим"] = ("найдено по тексту рецептов, а не по заголовкам и ключам"
+                           if mode == "по тексту"
+                           else "частичное совпадение: нашлись не все слова запроса")
+    return result
+
+
+def tool_get_guide(manifest, args):
+    guide_id = args.get("id", "")
+    for guide in manifest.get("рецепты", []):
+        if guide["id"] == guide_id:
+            try:
+                body = read_guide_body(guide)
+            except OSError:
+                return {"ошибка": "файл рецепта «%s» не найден: набор обновился во время сессии, "
+                                  "перезапусти сервер или повтори lookup_guide" % guide_id}
+            card = guide_card(guide)
+            card["файл"] = guide["файл"]
+            card["текст"] = body
+            return card
+    return {"ошибка": "рецепта с id «%s» нет" % guide_id}
 
 
 def tool_get_rule(manifest, args):
@@ -373,6 +484,8 @@ HANDLERS = {
     "list_tracks": tool_list_tracks,
     "lookup_rule": tool_lookup_rule,
     "get_rule": tool_get_rule,
+    "lookup_guide": tool_lookup_guide,
+    "get_guide": tool_get_guide,
     "rules_by_category": tool_rules_by_category,
     "rules_for_object": tool_rules_for_object,
     "checklist": tool_checklist,
@@ -412,12 +525,15 @@ def build_instructions(manifest):
     return "\n".join([
         "Сервер правил разработки на 1С:Предприятии (платформа 8.3/8.5): у каждого правила есть "
         "источник и проверка.",
-        "Набор: правил %d, направлений %d (ядро, с нуля, типовые конфигурации)."
-        % (manifest["правил"], manifest["направлений"]),
+        "Набор: правил %d, рецептов %d, направлений %d (ядро, с нуля, типовые конфигурации)."
+        % (manifest["правил"], manifest.get("рецептов", 0), manifest["направлений"]),
         "Перед правкой файла .bsl, .form, .mdo, .mxlx, .epf, .erf вызови checklist ОДИН раз на тип "
         "файла за сессию, лучше с compact=true; нужное правило открывай через get_rule.",
         "Увидел ошибку 1С (платформа, CheckConfig, клиент) — передай её текст дословно в "
         "lookup_rule, а не пересказ.",
+        "Вопрос «как сделать X» (собрать, загрузить, проверить, настроить), а не текст ошибки — "
+        "lookup_guide, шаги — get_guide; рецепт даёт порядок, правило — запрет: при расхождении "
+        "главнее правило (get_rule по id из поля «правила» рецепта).",
         "get_rule вызывай по id, найденным lookup_rule или checklist: тело правила длинное.",
         "Термин заказчика или предметной области — glossary_lookup; объект метаданных — "
         "rules_for_object.",
@@ -435,11 +551,15 @@ def short_manifest(manifest):
         "версия": manifest.get("версия"),
         "направлений": manifest["направлений"],
         "правил": manifest["правил"],
+        "рецептов": manifest.get("рецептов", 0),
         "направления": [{key: value for key, value in track.items() if key != "глоссарий"}
                         for track in manifest["направления"]],
         "правила": [{"id": rule["id"], "направление": rule["направление"],
                      "категория": rule["категория"], "серьёзность": rule["серьёзность"],
                      "заголовок": rule["заголовок"]} for rule in manifest["правила"]],
+        "рецепты": [{"id": guide["id"], "направление": guide["направление"],
+                     "категория": guide["категория"], "заголовок": guide["заголовок"]}
+                    for guide in manifest.get("рецепты", [])],
         "инструменты": [{"id": card.get("id"), "инструмент": card.get("инструмент"),
                          "статус": card.get("статус")}
                         for card in manifest.get("инструменты", [])],

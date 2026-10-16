@@ -174,5 +174,41 @@ class Fallbacks(unittest.TestCase):
         self.assertEqual([], rules)
 
 
+class GuideIndex(unittest.TestCase):
+    """Индекс рецептов: записи без серьёзности, дополнительный текст - «задача»."""
+
+    GUIDES = [
+        {"id": "how-001", "заголовок": "Собрать расширение", "ключи": ["расширение"],
+         "задача": "Расширение загружено и активно", "файл": "how-001"},
+        {"id": "how-002", "заголовок": "Запустить обработку", "ключи": ["обработка"],
+         "задача": "Обработка выполнена без интерфейса", "файл": "how-002"},
+    ]
+    BODIES = {"how-001": "шаги про загрузку", "how-002": "шаги про запуск"}
+
+    def index(self):
+        return search.Index(self.GUIDES, lambda guide: self.BODIES[guide["файл"]],
+                            text_key="задача")
+
+    def test_no_severity_does_not_break_rank(self):
+        found, _ = self.index().search("рецепт расширение", lambda guide: True)
+        self.assertEqual([], found)  # слова «рецепт» нет нигде
+        found, mode = self.index().search("расширение", lambda guide: True)
+        self.assertEqual(["how-001"], [guide["id"] for guide in found])
+        self.assertEqual("точный", mode)
+
+    def test_task_text_is_searched(self):
+        found, mode = self.index().search("без интерфейса", lambda guide: True)
+        self.assertEqual(["how-002"], [guide["id"] for guide in found])
+        self.assertEqual("точный", mode)
+
+    def test_ranking_is_stable_without_severity(self):
+        found, _ = self.index().search("how", lambda guide: True)
+        self.assertEqual(["how-001", "how-002"], [guide["id"] for guide in found])
+
+    def test_id_exact(self):
+        found, _ = self.index().search("how-002", lambda guide: True)
+        self.assertEqual(["how-002"], [guide["id"] for guide in found])
+
+
 if __name__ == "__main__":
     unittest.main()

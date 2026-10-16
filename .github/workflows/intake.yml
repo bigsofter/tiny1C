@@ -73,8 +73,8 @@ jobs:
           step "Манифест собран и совпадает с правилами" python3 scripts/manifest.py --проверить
           step "README совпадает с манифестом" python3 scripts/readme-counts.py --проверить
           step "Гигиена публикации" python3 scripts/hygiene.py
-          step "MCP-сервер отвечает (7 инструментов)" mcp_tools 7
-          step "С флагом --tools offline инструментов 8" mcp_tools 8 --tools offline
+          step "MCP-сервер отвечает (9 инструментов)" mcp_tools 9
+          step "С флагом --tools offline инструментов 10" mcp_tools 10 --tools offline
           step "Договорённость с порталом TinyCIO" python3 -m unittest tests.test_portal_contract
           step "Инструменты на фикстурах (golden)" python3 scripts/tools-check.py
           cat "$log"
