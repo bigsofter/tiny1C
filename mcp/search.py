@@ -66,9 +66,10 @@ def tokens(text):
 
 
 class Index:
-    """Индекс правил манифеста; тела читаются через read_body(rule) по требованию."""
+    """Индекс правил (или рецептов) манифеста; тела читаются через read_body(rule) по требованию."""
 
-    def __init__(self, rules, read_body):
+    def __init__(self, rules, read_body, text_key="симптом"):
+        """text_key — поле дополнительного текста записи: «симптом» у правил, «задача» у рецептов."""
         self.read_body = read_body
         self.entries = []
         self.bodies = None
@@ -81,12 +82,12 @@ class Index:
                     "id": set(tokens(rule["id"])),
                     "title": set(tokens(rule["заголовок"])),
                     "keys": set(tokens(" ".join(keys))),
-                    "symptom": set(tokens(rule.get("симптом", ""))),
+                    "symptom": set(tokens(rule.get(text_key, ""))),
                 },
                 "text": {
                     "title": fold(rule["заголовок"]),
                     "keys": fold(" ".join(keys)),
-                    "symptom": fold(rule.get("симптом", "")),
+                    "symptom": fold(rule.get(text_key, "")),
                 },
             })
 
@@ -146,7 +147,7 @@ class Index:
             return [], "точный"
 
         def rank(scored):
-            scored.sort(key=lambda row: (-row[0], SEVERITY_ORDER.get(row[1]["rule"]["серьёзность"], 9),
+            scored.sort(key=lambda row: (-row[0], SEVERITY_ORDER.get(row[1]["rule"].get("серьёзность"), 9),
                                          row[1]["rule"]["id"]))
             return [row[1]["rule"] for row in scored]
 

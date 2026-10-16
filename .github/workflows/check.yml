@@ -28,14 +28,14 @@ jobs:
             | python3 mcp/server.py | python3 -c "import json,sys; \
               tools=json.loads(sys.stdin.readline())['result']['tools']; \
               print('инструментов:', len(tools)); \
-              sys.exit(0 if len(tools) == 7 else 1)"
-      - name: С флагом --tools offline инструментов 8
+              sys.exit(0 if len(tools) == 9 else 1)"
+      - name: С флагом --tools offline инструментов 10
         run: |
           echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
             | python3 mcp/server.py --tools offline | python3 -c "import json,sys; \
               tools=json.loads(sys.stdin.readline())['result']['tools']; \
               print('инструментов:', len(tools)); \
-              sys.exit(0 if len(tools) == 8 else 1)"
+              sys.exit(0 if len(tools) == 10 else 1)"
       - name: Договорённость с порталом TinyCIO
         run: python3 -m unittest tests.test_portal_contract
       - name: Инструменты на фикстурах (golden)

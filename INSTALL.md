@@ -156,7 +156,7 @@ Harness подключает MCP плагином `@deepseek-ai/dsh-mcp-client` 
 ```
 
 Инструменты появятся под именами `mcp__tiny1c__lookup_rule`,
-`mcp__tiny1c__checklist` и так далее. `serverName` менять не стоит: от него
+`mcp__tiny1c__lookup_guide`, `mcp__tiny1c__checklist` и так далее. `serverName` менять не стоит: от него
 зависят имена всех инструментов.
 
 Проверка, что сервер поднялся:
@@ -187,7 +187,7 @@ Cursor, VS Code, Cline, Continue, Zed, LibreChat и другие читают с
 echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | python3 mcp/server.py
 ```
 
-В ответ должен прийти JSON с семью инструментами (с `--tools offline` - с восемью).
+В ответ должен прийти JSON с девятью инструментами (с `--tools offline` - с десятью).
 
 ---
 

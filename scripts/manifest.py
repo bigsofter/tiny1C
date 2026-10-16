@@ -11,7 +11,8 @@
      направления есть паспорт `track.md`;
   3. категория, серьёзность и платформы — из закрытых словарей;
   4. `источник` начинается с одного из видов: ошибка, измерение, эксперимент,
-     образец, решение, документация. Правило без своего источника в набор не
+     образец, решение, документация, практика (проверенный в деле порядок
+     действий; ждёт этого вида и рецепт). Правило без своего источника в набор не
      попадает — это и защита от пересказа чужих текстов, и признак того, что
      правило кто-то проверил;
   5. каждая запись `check` — «вид:описание», вид из закрытого словаря.
@@ -22,7 +23,11 @@
      «инструменты»: группа, исполнение, опасность и статус из закрытых словарей,
      непустая `идея` (для AGPL/GPL — с пометкой «только идея»), источник и check
      по тем же правилам, что у правил. Реализованный инструмент обязан иметь
-     проверку вида `fixtures` — инструмент без фикстуры не публикуется.
+     проверку вида `fixtures` — инструмент без фикстуры не публикуется;
+  8. рецепты `tracks/<код>/guides/how-NNN.md` — разделы «рецепты» (верх и у
+     направления): id по формату how-001 и сквозной уникальности, непустая
+     `задача`, источник/check по тем же правилам, `правила` — список id
+     существующих правил.
 
 Использование:
   scripts/manifest.py             собрать manifest.json
@@ -43,11 +48,14 @@ CATEGORIES = ["запросы", "модули", "формы-xml", "метада�
               "дополнительные-отчеты-и-обработки", "расширения"]
 SEVERITIES = ["критично", "важно", "справка"]
 PLATFORMS = ["8.3", "8.5"]
-SOURCES = ["ошибка", "измерение", "эксперимент", "образец", "решение", "документация"]
+SOURCES = ["ошибка", "измерение", "эксперимент", "образец", "решение", "документация", "практика"]
 CHECKS = ["lint", "checkconfig", "checkconfig-ext", "smoke-forms", "smoke-samples",
           "smoke-print", "fixtures", "refcheck", "xml-audit", "manual"]
 RULE_REQUIRED = ["id", "направление", "категория", "серьёзность", "платформы",
                  "заголовок", "ключи", "источник", "check"]
+GUIDE_REQUIRED = ["id", "направление", "категория", "платформы", "заголовок", "источник",
+                  "задача", "ключи", "check"]
+GUIDE_ID_RE = re.compile(r"^how-\d{3}$")
 TRACK_REQUIRED = ["код", "название", "вид", "платформы", "статус"]
 TRACK_KINDS = ["ядро", "с-нуля", "типовая", "собственная"]
 TRACK_STATES = ["ведётся", "открыто"]
@@ -243,9 +251,63 @@ def collect_tools(rule_ids, errors):
     return tools
 
 
+def collect_guides(code, track_dir, seen_ids, errors):
+    """Рецепты tracks/<код>/guides/*.md (кроме README.md и _GUIDE_TEMPLATE.md).
+
+    Ссылки «правила» проверяет вызывающий после сбора всех направлений.
+    """
+    guides = []
+    guides_dir = os.path.join(track_dir, "guides")
+    if not os.path.isdir(guides_dir):
+        return guides
+    for name in sorted(os.listdir(guides_dir)):
+        if not name.endswith(".md") or name in ("README.md", "_GUIDE_TEMPLATE.md"):
+            continue
+        where = "%s/guides/%s" % (code, name)
+        data, _ = read_document(os.path.join(guides_dir, name))
+        if data is None:
+            errors.append("%s: нет фронтматтера" % where)
+            continue
+        guide_id = data.get("id", "")
+        if guide_id != name[:-3]:
+            errors.append("%s: id «%s» не совпадает с именем файла" % (where, guide_id))
+        if not isinstance(guide_id, str) or not GUIDE_ID_RE.match(guide_id):
+            errors.append("%s: id «%s» не по формату «how-001»" % (where, guide_id))
+        if guide_id in seen_ids:
+            errors.append("%s: id «%s» уже занят в наборе" % (where, guide_id))
+        seen_ids.add(guide_id)
+        for field in GUIDE_REQUIRED:
+            if field not in data:
+                errors.append("%s: нет поля «%s»" % (where, field))
+        if data.get("направление") != code:
+            errors.append("%s: направление «%s» не совпадает с каталогом"
+                          % (where, data.get("направление")))
+        if data.get("категория") not in CATEGORIES:
+            errors.append("%s: неизвестная категория «%s»" % (where, data.get("категория")))
+        platforms = data.get("платформы", [])
+        for platform in platforms if isinstance(platforms, list) else [platforms]:
+            if platform not in PLATFORMS:
+                errors.append("%s: неизвестная платформа «%s»" % (where, platform))
+        task = data.get("задача", "")
+        if not isinstance(task, str) or not task.strip():
+            errors.append("%s: пустая «задача» — что получаем в итоге" % where)
+        linked = data.get("правила", [])
+        if not isinstance(linked, list):
+            errors.append("%s: «правила» должны быть списком" % where)
+            linked = []
+        check_source(data, where, errors)
+        checks = check_checks(data, where, errors)
+        guide = dict(data)
+        guide["правила"] = list(linked)
+        guide["файл"] = "tracks/%s/guides/%s" % (code, name)
+        guide["виды_проверок"] = sorted({entry.split(":", 1)[0] for entry in checks})
+        guides.append(guide)
+    return guides
+
+
 def collect():
     """Разбор дерева tracks. Возвращает (манифест, список ошибок)."""
-    errors, tracks, rules = [], [], []
+    errors, tracks, rules, guides = [], [], [], []
     seen_ids = set()
     for code in sorted(os.listdir(TRACKS)):
         track_dir = os.path.join(TRACKS, code)
@@ -315,10 +377,15 @@ def collect():
                 rules.append(rule)
                 track_rules.append(rule_id)
 
+        track_guides = collect_guides(code, track_dir, seen_ids, errors)
+        guides.extend(track_guides)
+
         glossary = read_glossary(os.path.join(track_dir, "glossary.md"))
         entry = dict(passport)
         entry["правил"] = len(track_rules)
         entry["правила"] = track_rules
+        entry["рецептов"] = len(track_guides)
+        entry["рецепты"] = [guide["id"] for guide in track_guides]
         entry["терминов"] = len(glossary)
         entry["глоссарий"] = glossary
         entry["карта_объектов"] = ("tracks/%s/objects.md" % code
@@ -335,6 +402,13 @@ def collect():
             for obj in term["объекты"]:
                 by_object.setdefault(obj, [])
 
+    rule_ids = {rule["id"] for rule in rules}
+    for guide in guides:
+        for rule_id in guide["правила"]:
+            if rule_id not in rule_ids:
+                errors.append("%s: правила «%s» в наборе нет" % (guide["файл"], rule_id))
+    guides.sort(key=lambda guide: guide.get("id", ""))
+
     manual_only = [rule["id"] for rule in rules if rule["виды_проверок"] == ["manual"]]
     tools = collect_tools({rule["id"] for rule in rules}, errors)
     manifest = {
@@ -347,6 +421,8 @@ def collect():
         "правила": rules,
         "инструментов": len(tools),
         "инструменты": tools,
+        "рецептов": len(guides),
+        "рецепты": guides,
     }
     return manifest, errors
 
@@ -378,9 +454,10 @@ def main():
     with open(MANIFEST, "w", encoding="utf-8") as handle:
         handle.write(body)
     print("Записан manifest.json: направлений %d, правил %d, только человеком ловятся %d, "
-          "инструментов %d"
+          "инструментов %d, рецептов %d"
           % (manifest["направлений"], manifest["правил"],
-             len(manifest["ловятся_только_человеком"]), manifest["инструментов"]))
+             len(manifest["ловятся_только_человеком"]), manifest["инструментов"],
+             manifest["рецептов"]))
     for track in manifest["направления"]:
         print("  %-11s %-42s правил %2d, терминов %2d"
               % (track["код"], track["название"], track["правил"], track["терминов"]))

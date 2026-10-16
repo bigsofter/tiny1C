@@ -86,6 +86,11 @@ def main():
                                  SEVERITY_ORDER.get(rule["серьёзность"], 9),
                                  rule["id"]))
 
+    guides = [guide for guide in manifest.get("рецепты", [])
+              if (tracks is None or guide["направление"] in tracks)
+              and (options["платформа"] is None
+                   or options["платформа"] in guide.get("платформы", []))]
+
     out = []
     out.append("# Правила разработки 1С (tiny1C)")
     out.append("")
@@ -101,13 +106,15 @@ def main():
         out.append("")
         out.append("Отбор — " + "; ".join(отбор) + ".")
     out.append("")
-    out.append("Правил в выгрузке: %d." % len(rules))
+    out.append("Правил в выгрузке: %d." % len(rules)
+               + (" Рецептов: %d." % len(guides) if guides else ""))
 
     for track in manifest["направления"]:
         if tracks is not None and track["код"] not in tracks:
             continue
         track_rules = [rule for rule in rules if rule["направление"] == track["код"]]
-        if not track_rules and not track["глоссарий"]:
+        track_guides = [guide for guide in guides if guide["направление"] == track["код"]]
+        if not track_rules and not track_guides and not track["глоссарий"]:
             continue
         out.append("")
         out.append("## %s (%s)" % (track["название"], track["код"]))
@@ -133,6 +140,25 @@ def main():
                     out.append("Полный текст: `%s`." % rule["файл"])
                 out.append("")
 
+        if track_guides:
+            out.append("### Рецепты")
+            out.append("")
+            for guide in track_guides:
+                out.append("#### %s — %s" % (guide["id"], guide["заголовок"]))
+                out.append("")
+                out.append("*%s · платформы %s · ловится: %s*"
+                           % (guide.get("задача", ""),
+                              "/".join(guide.get("платформы", [])),
+                              "; ".join(guide.get("check", []))))
+                out.append("")
+                if options["полный"]:
+                    out.append(rule_body(guide))
+                else:
+                    out.append("Ключи: " + ", ".join(guide.get("ключи", [])) + ".")
+                    out.append("")
+                    out.append("Полный текст: `%s`." % guide["файл"])
+                out.append("")
+
         if track["глоссарий"]:
             out.append("### Глоссарий")
             out.append("")
@@ -149,8 +175,8 @@ def main():
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(body)
-        print("Записано: %s (правил %d, %d КБ)"
-              % (options["выход"], len(rules), len(body.encode("utf-8")) // 1024))
+        print("Записано: %s (правил %d, рецептов %d, %d КБ)"
+              % (options["выход"], len(rules), len(guides), len(body.encode("utf-8")) // 1024))
     else:
         sys.stdout.write(body)
     return 0

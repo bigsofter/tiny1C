@@ -13,7 +13,7 @@
   2. пути машины разработчика — /Users/…, /home/…, C:\\…, ~/Dev, ~/EDT;
   3. следы чужих корпусов правил — заимствованный текст вместо своего;
   4. артефакты 1С и просто бинарники — .cf, .epf, .dt, базы, архивы;
-  5. правила без поля «источник» — правило, о котором неизвестно, откуда оно;
+  5. правила и рецепты без поля «источник» — запись, о которой неизвестно, откуда она;
      карточки инструментов без «идея», «источник», «check» или «опасность»;
   6. расхождение README с манифестом — таблица направлений и доля правил,
      ловимых только человеком, отстали от набора.
@@ -28,8 +28,9 @@
 Использование:
   scripts/hygiene.py                проверить дерево (1 при находках)
   scripts/hygiene.py --список       показать, что именно ищется
-  scripts/hygiene.py --файл путь    проверить один файл правила вне дерева (черновик,
-                                    «конверт»): формат и словари как у манифеста, те же
+  scripts/hygiene.py --файл путь    проверить один файл правила или рецепта вне дерева
+                                    (черновик, «конверт»; вид определяется сам: рецепт —
+                                    есть «задача» или id how-…): формат и словари как у манифеста, те же
                                     образцы приватного, плюс почта и ИНН; исключений нет
 """
 
@@ -107,18 +108,19 @@ def check_sources(findings):
     if not os.path.isdir(tracks):
         return
     for code in sorted(os.listdir(tracks)):
-        rules_dir = os.path.join(tracks, code, "rules")
-        if not os.path.isdir(rules_dir):
-            continue
-        for name in sorted(os.listdir(rules_dir)):
-            if not name.endswith(".md") or name == "README.md":
+        for folder, noun in (("rules", "правило"), ("guides", "рецепт")):
+            records_dir = os.path.join(tracks, code, folder)
+            if not os.path.isdir(records_dir):
                 continue
-            path = os.path.join(rules_dir, name)
-            with open(path, encoding="utf-8") as handle:
-                head = handle.read(2000)
-            if "\nисточник:" not in head:
-                findings.append((os.path.relpath(path, ROOT), 0, "источник",
-                                 "правило без поля «источник»"))
+            for name in sorted(os.listdir(records_dir)):
+                if not name.endswith(".md") or name == "README.md":
+                    continue
+                path = os.path.join(records_dir, name)
+                with open(path, encoding="utf-8") as handle:
+                    head = handle.read(2000)
+                if "\nисточник:" not in head:
+                    findings.append((os.path.relpath(path, ROOT), 0, "источник",
+                                     "%s без поля «источник»" % noun))
 
     tools = os.path.join(ROOT, "tools")
     for current, dirs, files in os.walk(tools):
@@ -205,7 +207,7 @@ FILE_ONLY_PATTERNS = [
 
 
 def check_one_file(path):
-    """Проверка одного файла правила вне дерева. Возвращает число находок."""
+    """Проверка одного файла правила или рецепта вне дерева. Возвращает число находок."""
     findings = []
     try:
         with open(path, encoding="utf-8") as handle:
@@ -228,15 +230,29 @@ def check_one_file(path):
     if data is None:
         problems.append("нет фронтматтера (--- ... --- в начале файла)")
     else:
-        for field in manifest.RULE_REQUIRED:
+        is_guide = "задача" in data or str(data.get("id", "")).startswith("how-")
+        for field in (manifest.GUIDE_REQUIRED if is_guide else manifest.RULE_REQUIRED):
             if field not in data:
                 problems.append("нет поля «%s»" % field)
         rule_id = data.get("id", "")
-        if not re.match(r"^[a-z]+-(\d{3}|XXX)$", str(rule_id)):
+        if is_guide:
+            if not re.match(r"^how-(\d{3}|XXX)$", str(rule_id)):
+                problems.append("id «%s» не по формату «how-001» или «how-XXX»" % rule_id)
+            if not str(data.get("задача", "")).strip():
+                problems.append("пустая «задача» - что получаем в итоге")
+            linked = data.get("правила", [])
+            if not isinstance(linked, list):
+                problems.append("«правила» должны быть списком id")
+            else:
+                for linked_id in linked:
+                    if not re.match(r"^[a-z][a-z0-9]*-\d{3}$", str(linked_id)):
+                        problems.append("правило «%s» в «правила» не по формату «тема-001»"
+                                        % linked_id)
+        elif not re.match(r"^[a-z]+-(\d{3}|XXX)$", str(rule_id)):
             problems.append("id «%s» не по формату «тема-001» или «тема-XXX»" % rule_id)
         if data.get("категория") not in manifest.CATEGORIES:
             problems.append("неизвестная категория «%s»" % data.get("категория"))
-        if data.get("серьёзность") not in manifest.SEVERITIES:
+        if not is_guide and data.get("серьёзность") not in manifest.SEVERITIES:
             problems.append("неизвестная серьёзность «%s»" % data.get("серьёзность"))
         platforms = data.get("платформы", [])
         if not isinstance(platforms, list) or not platforms:
@@ -256,9 +272,19 @@ def check_one_file(path):
         if not re.search(r"\d{4}-\d{2}", source) and not source.startswith("документация:"):
             print("  совет: в источнике нет даты (ГГГГ-ММ-ДД) - по ней правило проверяют позже")
         # Разделы шаблона в наборе соблюдаются не везде - это совет, а не провал.
-        for heading in ("Симптом", "Причина", "Правило", "Как проверить"):
+        headings = ("Шаги", "Проверка результата") if is_guide else \
+            ("Симптом", "Причина", "Правило", "Как проверить")
+        template = "_GUIDE_TEMPLATE.md" if is_guide else "_TEMPLATE.md"
+        for heading in headings:
             if not re.search(r"(?m)^## %s\s*$" % heading, body):
-                print("  совет: нет раздела «## %s» (шаблон tracks/_TEMPLATE.md)" % heading)
+                print("  совет: нет раздела «## %s» (шаблон tracks/%s)" % (heading, template))
+        if is_guide and isinstance(data.get("правила"), list) and data["правила"]:
+            known = {rule["id"] for rule in json.load(
+                open(MANIFEST_FILE, encoding="utf-8")).get("правила", [])} \
+                if os.path.exists(MANIFEST_FILE) else set()
+            for linked_id in data["правила"]:
+                if known and linked_id not in known:
+                    print("  совет: правила «%s» в наборе нет (проверь id)" % linked_id)
     for problem in problems:
         findings.append((0, "формат", problem))
 
@@ -284,7 +310,7 @@ def main():
         for name, _, note in PATTERNS:
             print("  %-22s %s" % (name, note))
         print("  %-22s %s" % ("бинарник", "запрещённые расширения и файлы больше 512 КБ"))
-        print("  %-22s %s" % ("источник", "правило без поля «источник», карточка "
+        print("  %-22s %s" % ("источник", "правило или рецепт без поля «источник», карточка "
                                           "инструмента без идеи/источника/check/опасности"))
         print("  %-22s %s" % ("README", "таблица направлений и доля «только человеком» "
                                         "против манифеста"))

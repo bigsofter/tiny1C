@@ -39,6 +39,32 @@ check: ["manual:глазом"]
 Глазами.
 """
 
+GOOD_GUIDE = """---
+id: how-XXX
+направление: core
+категория: расширения
+платформы: [8.3, 8.5]
+заголовок: "Тестовый рецепт"
+источник: "практика:проект 2026-10-01, где проверено"
+задача: "Получить тестовый результат"
+ключи: [слово]
+check: ["manual:глазом"]
+правила: [ext-002]
+---
+
+## Шаги
+
+1. Сделать раз.
+
+## Проверка результата
+
+Глазами.
+
+## Где ломается
+
+Не отмечено.
+"""
+
 
 class HygieneFile(unittest.TestCase):
 
@@ -70,6 +96,24 @@ class HygieneFile(unittest.TestCase):
             code, out = self.run_on(GOOD.replace(old, new))
             self.assertEqual(1, code, (old, out))
             self.assertIn(mark, out)
+
+    def test_good_guide_passes(self):
+        code, out = self.run_on(GOOD_GUIDE)
+        self.assertEqual(0, code, out)
+
+    def test_guide_is_checked_as_guide(self):
+        # Без «источник» и «задача» рецепт - находка; серьёзность ему не нужна.
+        code, out = self.run_on(GOOD_GUIDE.replace(
+            'источник: "практика:проект 2026-10-01, где проверено"\n', ""))
+        self.assertEqual(1, code, out)
+        self.assertIn("источник", out)
+        code, out = self.run_on(GOOD_GUIDE.replace("id: how-XXX", "id: bsl-XXX"))
+        self.assertEqual(1, code, out)  # вид определяет «задача»: id правила рецепту не годится
+        self.assertIn("how-001", out)
+        code, out = self.run_on(GOOD_GUIDE.replace("id: how-XXX", "id: ЧТО-ТО"))
+        self.assertEqual(1, code, out)
+        code, out = self.run_on(GOOD_GUIDE.replace("правила: [ext-002]", "правила: [Что_то]"))
+        self.assertEqual(1, code, out)
 
     def test_no_frontmatter_fails(self):
         self.assertEqual(1, self.run_on("просто текст")[0])
