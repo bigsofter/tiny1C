@@ -36,13 +36,13 @@ jobs:
               tools=json.loads(sys.stdin.readline())['result']['tools']; \
               print('инструментов:', len(tools)); \
               sys.exit(0 if len(tools) == 10 else 1)"
-      - name: С флагом --tools instructions инструментов 12
+      - name: С флагом --tools instructions инструментов 13
         run: |
           echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
             | python3 mcp/server.py --tools instructions | python3 -c "import json,sys; \
               tools=json.loads(sys.stdin.readline())['result']['tools']; \
               print('инструментов:', len(tools)); \
-              sys.exit(0 if len(tools) == 12 else 1)"
+              sys.exit(0 if len(tools) == 13 else 1)"
       - name: Договорённость с порталом TinyCIO
         run: python3 -m unittest tests.test_portal_contract
       - name: Фикстура знаний сетевого режима собрана
@@ -77,6 +77,6 @@ jobs:
             | python3 -c "import json,sys; \
               tools=json.loads(sys.stdin.read())['result']['tools']; \
               print('инструментов:', len(tools)); \
-              sys.exit(0 if len(tools) == 12 else 1)"
+              sys.exit(0 if len(tools) == 13 else 1)"
           docker logs tiny1c
           docker rm -f tiny1c

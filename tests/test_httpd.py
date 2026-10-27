@@ -117,8 +117,9 @@ class HttpServer(unittest.TestCase):
         self.assertEqual(200, status)
         self.assertTrue(headers["Content-Type"].startswith("application/json"))
         names = [tool["name"] for tool in json.loads(raw)["result"]["tools"]]
-        self.assertEqual(12, len(names))
+        self.assertEqual(13, len(names))
         self.assertIn("match_config", names)
+        self.assertIn("get_instructions_file", names)
         self.assertIn("get_instructions", names)
         self.assertIn("get_cheats", names)
         self.assertNotIn("where_is", names)  # у фикстуры нет карточки инструмента
@@ -186,8 +187,8 @@ class HttpServer(unittest.TestCase):
 
     def test_hot_swap_of_snapshot_changes_answers(self):
         other_tree = kf.fixture_copy(self)
-        with open(f"{other_tree}/tracks/ut/notes.md", "a", encoding="utf-8") as handle:
-            handle.write("- Новая особенность после обновления знаний.\n")
+        with open(f"{other_tree}/tracks/ut/where_is.md", "a", encoding="utf-8") as handle:
+            handle.write("| Новая особенность после обновления знаний | Продажи | Продажи → Новое |\n")
         builder = kf.load_module("tiny1c_manifest_hot", "scripts", "manifest.py")
         manifest, errors = builder.collect(root=other_tree)
         self.assertEqual([], errors)
@@ -201,7 +202,7 @@ class HttpServer(unittest.TestCase):
             self.assertEqual("deadbeef1234", result["ревизия"])
             self.assertIn("Новая особенность", result["текст"])
             names = [t["name"] for t in json.loads(self.rpc("tools/list")[2])["result"]["tools"]]
-            self.assertEqual(12, len(names))
+            self.assertEqual(13, len(names))
         finally:
             self.knowledge.current = old
         result = self.tool_text(self.rpc("tools/call", {"name": "get_instructions",

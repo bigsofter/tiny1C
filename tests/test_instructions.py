@@ -73,23 +73,38 @@ class Pack(unittest.TestCase):
         self.assertEqual("ut", result["направление"])
         self.assertEqual("abc123", result["ревизия"])
         self.assertEqual([], result["расширяет"])
-        self.assertEqual(["where_is.md", "objects.md", "notes.md", "faq.md"],
-                         [part["имя"] for part in result["части"]])
+        self.assertEqual(["where_is.md", "notes.md"], [part["имя"] for part in result["части"]])
         self.assertEqual({"ut"}, {part["направление"] for part in result["части"]})
         self.assertEqual(["ut-orders", "ut-stock"], [chip["id"] for chip in result["чипы"]])
-        self.assertIn("## Где это в 1С\n", result["текст"])
-        self.assertIn("Заказы клиентов", result["текст"])
+        self.assertEqual(["faq.md", "objects.md"], result["файлы_по_запросу"])
+        text = result["текст"]
+        self.assertIn("## Конфигурация\n", text)
+        self.assertIn("Имена конфигурации (Метаданные.Имя): УправлениеТорговлей, УправлениеТорговлейБазовая.", text)
+        self.assertIn("Регистры: есть накопление; нет бухгалтерия, расчёт.", text)
+        self.assertIn("## Где это в 1С\n", text)
+        self.assertIn("Заказы клиентов", text)
+        # сжатие: неподтверждённые строки, разделы «(подробно)», ссылки на источники и колонка статуса не уходят
+        self.assertNotIn("Инвентаризация", text)
+        self.assertNotIn("[проверить]", text)
+        self.assertNotIn("(S-1)", text)
+        self.assertNotIn("(опыт)", text)
+        self.assertIn("регистр бухгалтерии отсутствует.", text)
+        self.assertNotIn("подробно", text)
+        self.assertNotIn("которые в промпт не идут", text)
+        self.assertIn("### Коротко", text)          # заголовки файла опущены на уровень
+        self.assertNotIn("# Особенности УТ (фикстура)", text)
+        self.assertNotIn("Документ.ЗаказКлиента", text)  # objects.md — только по запросу
         self.assertNotIn("шпаргалки", result)
-        self.assertNotIn("Шпаргалки", result["текст"])
+        self.assertNotIn("Шпаргалки", text)
         self.assertEqual("ut", result["профиль"]["семейство"])
-        self.assertEqual(len(result["текст"].encode("utf-8")), result["размер"])
+        self.assertEqual(len(text.encode("utf-8")), result["размер"])
 
     def test_extends_puts_base_first_then_own(self):
         result = self.pack(track="ka")
         self.assertEqual(["ut"], result["расширяет"])
         order = [(part["направление"], part["имя"]) for part in result["части"]]
-        self.assertEqual([("ut", "where_is.md"), ("ut", "objects.md"), ("ut", "notes.md"),
-                          ("ut", "faq.md"), ("ka", "where_is.md"), ("ka", "notes.md")], order)
+        self.assertEqual([("ut", "where_is.md"), ("ut", "notes.md"),
+                          ("ka", "where_is.md"), ("ka", "notes.md")], order)
         self.assertEqual(["ut-orders", "ut-stock", "ka-osv"], [chip["id"] for chip in result["чипы"]])
         self.assertEqual("ka", result["чипы"][-1]["направление"])
         text = result["текст"]
@@ -103,7 +118,26 @@ class Pack(unittest.TestCase):
         self.assertEqual(["accounting", "queries"], [cheat["имя"] for cheat in result["шпаргалки"]])
         self.assertIn("# Шпаргалки платформы", result["текст"])
         self.assertIn("## Язык запросов", result["текст"])
-        self.assertLess(result["текст"].index("Типовые вопросы"), result["текст"].index("Шпаргалки"))
+        self.assertLess(result["текст"].index("Особенности"), result["текст"].index("Шпаргалки"))
+
+    def test_file_tool_gives_whole_file_with_marks(self):
+        result = instructions.tool_get_instructions_file(self.snap, {"track": "ka", "file": "notes.md"})
+        self.assertEqual(["ut"], result["расширяет"])
+        self.assertEqual([("ut", "notes.md"), ("ka", "notes.md")],
+                         [(p["направление"], p["имя"]) for p in result["части"]])
+        self.assertIn("[проверить]", result["текст"])
+        self.assertIn("(подробно)", result["текст"])
+        self.assertIn("(S-1)", result["текст"])
+        self.assertIn("не подтверждены", result["примечание"])
+        own = instructions.tool_get_instructions_file(self.snap, {"track": "ka", "file": "notes.md",
+                                                                   "with_base": False})
+        self.assertEqual([("ka", "notes.md")], [(p["направление"], p["имя"]) for p in own["части"]])
+        self.assertIsNone(own["примечание"])
+        objects = instructions.tool_get_instructions_file(self.snap, {"track": "ut", "file": "objects.md"})
+        self.assertIn("Документ.ЗаказКлиента", objects["текст"])
+        for args in ({"track": "ut", "file": "chips.json"}, {"track": "ut", "file": "нет"},
+                     {"track": "unf", "file": "objects.md"}, {"track": "ka", "file": "faq.md", "with_base": False}):
+            self.assertIn("ошибка", instructions.tool_get_instructions_file(self.snap, args), args)
 
     def test_track_without_pack_or_unknown(self):
         for track in ("unf", "core", "нет", ""):
@@ -122,9 +156,9 @@ class Pack(unittest.TestCase):
     def test_tools_list_and_handlers_via_server(self):
         tools, handlers = server.enabled_tools(self.snap, {"instructions"})
         names = [tool["name"] for tool in tools]
-        self.assertEqual(12, len(names))
-        self.assertEqual(["match_config", "get_instructions", "get_cheats"], names[-3:])
-        for tool in tools[-3:]:
+        self.assertEqual(13, len(names))
+        self.assertEqual(["match_config", "get_instructions", "get_instructions_file", "get_cheats"], names[-4:])
+        for tool in tools[-4:]:
             self.assertTrue(tool["annotations"]["readOnlyHint"], tool["name"])
         answer = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                                 "params": {"name": "get_instructions", "arguments": {"track": "ka"}}},

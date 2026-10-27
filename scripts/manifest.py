@@ -32,8 +32,10 @@
      `objects.md`, `notes.md`, `faq.md`, `chips.json` и шпаргалки
      `tracks/<код>/cheats/*.md` — ключ «инструкции» у направления: профиль по
      схеме (см. PROFILE_* ниже), `расширяет` только на направление с пакетом,
-     чипы — JSON-список записей с id/заголовок/текст, потолок размера PACK_LIMIT
-     (пакет уходит в системный промпт ИИ-помощника целиком).
+     чипы — JSON-список записей с id/заголовок/текст; потолки: текст для
+     промпта (profile + where_is + notes + chips после сжатия по mcp/packtext.py)
+     не больше PROMPT_LIMIT, сырые файлы пакета — PACK_LIMIT, шпаргалки —
+     CHEATS_LIMIT. Файл sources.md (источники S-n с URL) в пакет не входит.
 
 Использование:
   scripts/manifest.py             собрать manifest.json
@@ -44,6 +46,7 @@
 """
 
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -58,7 +61,10 @@ PACK_FILES = ["where_is.md", "objects.md", "notes.md", "faq.md", "chips.json"]
 PACK_TITLES = {"where_is.md": "Где это в 1С", "objects.md": "Объекты и документы",
                "notes.md": "Особенности конфигурации", "faq.md": "Типовые вопросы"}
 CHEATS_DIR = "cheats"
-PACK_LIMIT = 24 * 1024          # байт на пакет направления (без базового) и отдельно на шпаргалки
+PROMPT_FILES = ["where_is.md", "notes.md"]   # markdown-части, которые get_instructions кладёт в промпт
+PROMPT_LIMIT = 24 * 1024        # байт текста для промпта на направление (профиль + where_is + notes + чипы, сжато)
+PACK_LIMIT = 96 * 1024          # байт сырых файлов пакета направления (справочник с пометками)
+CHEATS_LIMIT = 24 * 1024        # байт шпаргалок (они тоже идут в промпт целиком)
 PROFILE_REQUIRED = ["семейство", "имена", "тема"]
 PROFILE_OPTIONAL = ["синоним_re", "мин_версия", "поставщики", "признаки", "план_счетов",
                     "виды_субконто", "без_кода", "расширяет"]
@@ -66,6 +72,7 @@ PROFILE_FLAGS = ["бухгалтерия", "накопление", "расчёт
 VERSION_RE = re.compile(r"^\d+(\.\d+){1,3}$")
 FAMILY_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 CHIP_REQUIRED = ["id", "заголовок", "текст"]
+CHIP_OPTIONAL = ["тема", "подсказка", "параметры", "проверить"]
 CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 CATEGORIES = ["запросы", "модули", "формы-xml", "метаданные", "макеты", "процесс",
@@ -212,6 +219,20 @@ def check_checks(data, where, errors):
     return checks
 
 
+_packtext = None
+
+
+def packtext():
+    """mcp/packtext.py — правила сжатия текста пакета для промпта (общие с сервером)."""
+    global _packtext
+    if _packtext is None:
+        spec = importlib.util.spec_from_file_location(
+            "tiny1c_packtext", os.path.join(ROOT, "mcp", "packtext.py"))
+        _packtext = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_packtext)
+    return _packtext
+
+
 def read_pack_text(path, rel, errors):
     """Текст файла пакета: UTF-8 без управляющих символов. None при ошибке."""
     try:
@@ -317,8 +338,13 @@ def check_chips(text, where, errors):
             if not isinstance(chip.get(key), str) or not chip[key].strip():
                 errors.append("%s: чип №%d без поля «%s»" % (where, position + 1, key))
         for key in chip:
-            if key not in CHIP_REQUIRED and key != "тема":
-                errors.append("%s: чип №%d — неизвестное поле «%s»" % (where, position + 1, key))
+            if key not in CHIP_REQUIRED and key not in CHIP_OPTIONAL:
+                errors.append("%s: чип №%d — неизвестное поле «%s» (есть: %s)"
+                              % (where, position + 1, key, ", ".join(CHIP_REQUIRED + CHIP_OPTIONAL)))
+        if "параметры" in chip and not isinstance(chip["параметры"], dict):
+            errors.append("%s: чип №%d — «параметры» должны быть объектом" % (where, position + 1))
+        if "проверить" in chip and not isinstance(chip["проверить"], bool):
+            errors.append("%s: чип №%d — «проверить» true/false" % (where, position + 1))
         if chip.get("id") in seen:
             errors.append("%s: id чипа «%s» повторяется" % (where, chip.get("id")))
         seen.add(chip.get("id"))
@@ -331,7 +357,7 @@ def collect_pack(code, track_dir, errors):
     а значит, пакет никому не достанется. Шпаргалки (`cheats/`) профиля не требуют.
     Ссылку «расширяет» проверяет вызывающий после сбора всех направлений.
     """
-    profile, files, cheats = None, [], []
+    profile, files, cheats, prompt_size = None, [], [], 0
     profile_path = os.path.join(track_dir, "profile.json")
     if os.path.exists(profile_path):
         where = "%s/profile.json" % code
@@ -346,6 +372,8 @@ def collect_pack(code, track_dir, errors):
                 check_profile(profile, where, code, errors)
                 if not isinstance(profile, dict):
                     profile = None
+                else:
+                    prompt_size += len(text.encode("utf-8"))
     for name in PACK_FILES:
         path = os.path.join(track_dir, name)
         if not os.path.exists(path):
@@ -356,11 +384,14 @@ def collect_pack(code, track_dir, errors):
             continue
         if name == "chips.json":
             check_chips(text, where, errors)
+            prompt_size += len(text.encode("utf-8"))
+        elif name in PROMPT_FILES:
+            prompt_size += packtext().size_of(packtext().prompt_text(text))
         files.append({"имя": name, "файл": "tracks/%s/%s" % (code, name),
                       "sha": file_digest(text), "размер": len(text.encode("utf-8"))})
-    orphans = [item["имя"] for item in files if item["имя"] != "objects.md"]
+    orphans = [item["имя"] for item in files if item["имя"] not in ("objects.md", "chips.json")]
     if orphans and not os.path.exists(profile_path):
-        # objects.md — ещё и карта объектов для программиста, он живёт и без профиля.
+        # objects.md — ещё и карта объектов для программиста; chips.json у core — общие чипы.
         errors.append("%s: файлы пакета (%s) без profile.json — конфигурацию не определить"
                       % (code, ", ".join(orphans)))
     cheats_dir = os.path.join(track_dir, CHEATS_DIR)
@@ -384,17 +415,20 @@ def collect_pack(code, track_dir, errors):
         return None
     size = sum(item["размер"] for item in files)
     cheats_size = sum(item["размер"] for item in cheats)
+    if prompt_size > PROMPT_LIMIT:
+        errors.append("%s: текст пакета для промпта %d байт больше потолка %d — сократить notes/where_is "
+                      "или перенести подробности в разделы «(подробно)»" % (code, prompt_size, PROMPT_LIMIT))
     if size > PACK_LIMIT:
-        errors.append("%s: пакет инструкций %d байт больше потолка %d — он целиком идёт в промпт"
-                      % (code, size, PACK_LIMIT))
-    if cheats_size > PACK_LIMIT:
-        errors.append("%s: шпаргалки %d байт больше потолка %d" % (code, cheats_size, PACK_LIMIT))
+        errors.append("%s: файлы пакета %d байт больше потолка %d" % (code, size, PACK_LIMIT))
+    if cheats_size > CHEATS_LIMIT:
+        errors.append("%s: шпаргалки %d байт больше потолка %d" % (code, cheats_size, CHEATS_LIMIT))
     return {
         "профиль": profile,
         "расширяет": (profile or {}).get("расширяет"),
         "файлы": files,
         "шпаргалки": cheats,
         "размер": size,
+        "размер_промпта": prompt_size,
         "размер_шпаргалок": cheats_size,
     }
 

@@ -51,8 +51,8 @@ class Sync(unittest.TestCase):
 
     def test_new_commit_is_picked_up_and_old_tree_kept_for_rollback(self):
         self.kn.sync_once()
-        with open(os.path.join(self.tree, "tracks", "ut", "notes.md"), "a", encoding="utf-8") as handle:
-            handle.write("- Появилось после второго коммита.\n")
+        with open(os.path.join(self.tree, "tracks", "ut", "where_is.md"), "a", encoding="utf-8") as handle:
+            handle.write("| Появилось после второго коммита | Продажи | Продажи → Новое |\n")
         sha2 = kf.commit_all(self.tree, "правка заметок")
         self.assertTrue(self.kn.sync_once())
         self.assertEqual(sha2, self.kn.current.revision)

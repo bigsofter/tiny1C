@@ -101,10 +101,11 @@ class ServerTools(unittest.TestCase):
     def test_instructions_group_is_opt_in(self):
         # Группа instructions (помощник в базе 1С) включается флагом; без него набор прежний.
         names = tool_names(("--tools", "instructions"))
-        self.assertEqual(12, len(names))
-        self.assertEqual(["match_config", "get_instructions", "get_cheats"], names[-3:])
+        self.assertEqual(13, len(names))
+        self.assertEqual(["match_config", "get_instructions", "get_instructions_file", "get_cheats"],
+                         names[-4:])
         both = tool_names((), {"TINY1C_TOOLS": "offline,instructions"})
-        self.assertEqual(13, len(both))
+        self.assertEqual(14, len(both))
         self.assertIn("where_is", both)
         answer = call([{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                         "params": {"name": "get_cheats", "arguments": {}}}])[0]

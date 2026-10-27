@@ -7,9 +7,11 @@
 особенности, типовые вопросы, чипы-подсказки и шпаргалки языка запросов, чтобы
 положить это в системный промпт. Отсюда три инструмента:
 
-  match_config      факты базы -> направление набора (по profile.json);
-  get_instructions  целый пакет направления с учётом «расширяет» (ka/erp поверх ut);
-  get_cheats        шпаргалки платформы (tracks/core/cheats/*.md).
+  match_config           факты базы -> направление набора (по profile.json);
+  get_instructions       пакет направления для промпта с учётом «расширяет» (ka/erp поверх ut):
+                         профиль, where_is и notes в сжатом виде (mcp/packtext.py), чипы;
+  get_instructions_file  один файл пакета целиком (objects.md, faq.md, where_is.md, notes.md) — по запросу;
+  get_cheats             шпаргалки платформы (tracks/core/cheats/*.md).
 
 Формат пакета и profile.json — README, «Пакет инструкций по конфигурации».
 Группа включается флагом `--tools instructions`; сетевой сервис включает её сам.
@@ -18,7 +20,11 @@
 import json
 import re
 
+import packtext
 import snapshot as snap
+
+PROMPT_FILES = ("where_is.md", "notes.md")
+FILE_TOOLS = ("objects.md", "faq.md", "where_is.md", "notes.md")
 
 INSTRUCTION_TOOLS = [
     {
@@ -43,12 +49,14 @@ INSTRUCTION_TOOLS = [
     },
     {
         "name": "get_instructions",
-        "description": "Целый пакет инструкций по конфигурации одним вызовом: профиль, «где это "
-                       "в 1С», объекты, особенности, типовые вопросы, чипы; если направление "
+        "description": "Пакет инструкций по конфигурации для системного промпта одним вызовом: "
+                       "профиль, «где это в 1С» и особенности в сжатом виде (без неподтверждённых "
+                       "строк, подробных разделов и колонок статуса), чипы; если направление "
                        "расширяет другое (ka/erp поверх ut) — сначала части базового, потом "
-                       "добавки. Поле «текст» — готовый markdown для системного промпта; "
-                       "«части» — то же по файлам. include_core=true добавляет шпаргалки "
-                       "платформы (как get_cheats). Направление — из match_config.",
+                       "добавки. Поле «текст» — готовый markdown; «части» — то же по файлам. "
+                       "include_core=true добавляет шпаргалки платформы (как get_cheats). "
+                       "Карта объектов и типовые вопросы целиком — get_instructions_file. "
+                       "Направление — из match_config.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -59,6 +67,26 @@ INSTRUCTION_TOOLS = [
             "required": ["track"],
         },
         "annotations": {"title": "Пакет инструкций по конфигурации", "readOnlyHint": True,
+                        "destructiveHint": False, "openWorldHint": False},
+    },
+    {
+        "name": "get_instructions_file",
+        "description": "Один файл пакета инструкций целиком, как справочник: objects.md (карта "
+                       "объектов: документ, роль, чем закрывается), faq.md (типовые вопросы и "
+                       "ответы-маршруты), where_is.md или notes.md без сжатия. Для разовых "
+                       "вопросов, когда сжатого пакета из get_instructions мало. Строки с "
+                       "пометкой [проверить] — неподтверждённые, их не выдавать как факт.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "track": {"type": "string", "description": "код направления, например bp"},
+                "file": {"type": "string", "description": "objects.md | faq.md | where_is.md | notes.md"},
+                "with_base": {"type": "boolean",
+                              "description": "добавить тот же файл базового направления (по умолчанию true)"},
+            },
+            "required": ["track", "file"],
+        },
+        "annotations": {"title": "Файл пакета инструкций", "readOnlyHint": True,
                         "destructiveHint": False, "openWorldHint": False},
     },
     {
@@ -163,21 +191,64 @@ def extends_chain(manifest, code):
     return chain
 
 
-def read_parts(manifest, chain):
+def read_chips(manifest, codes):
+    """Чипы направлений по порядку (core — общие — первым); чипы с «проверить» не отдаются."""
+    packs = tracks_with_packs(manifest)
+    chips = []
+    for code in codes:
+        track = packs.get(code)
+        if not track:
+            continue
+        for item in track["инструкции"]["файлы"]:
+            if item["имя"] != "chips.json":
+                continue
+            for chip in json.loads(snap.read_text(manifest, item["файл"])):
+                if chip.get("проверить") is True:
+                    continue
+                chips.append(dict(chip, **{"направление": code}))
+    return chips
+
+
+def read_parts(manifest, chain, names=PROMPT_FILES, compact=True):
     """Части пакета по цепочке: файлы базового направления, потом добавки."""
     packs = tracks_with_packs(manifest)
-    parts, chips = [], []
+    parts = []
     for code in chain:
         for item in packs[code]["инструкции"]["файлы"]:
-            text = snap.read_text(manifest, item["файл"])
-            if item["имя"] == "chips.json":
-                for chip in json.loads(text):
-                    chips.append(dict(chip, **{"направление": code}))
+            if item["имя"] not in names:
                 continue
+            text = snap.read_text(manifest, item["файл"])
+            text = packtext.prompt_text(text) if compact else text.rstrip("\n")
+            text = packtext.demote(text)
             parts.append({"направление": code, "имя": item["имя"],
                           "раздел": PACK_TITLES.get(item["имя"], item["имя"]),
-                          "sha": item["sha"], "текст": text.rstrip("\n")})
-    return parts, chips
+                          "sha": item["sha"], "текст": text})
+    return parts
+
+
+def render_profile(track):
+    """Профиль одной строкой на факт — то, что помощнику нужно знать о конфигурации."""
+    profile = track["инструкции"]["профиль"]
+    lines = ["## Конфигурация", "",
+             "- Конфигурация: %s (направление набора `%s`, семейство `%s`); тема: %s."
+             % (track["название"], track["код"], profile.get("семейство"), profile.get("тема"))]
+    if profile.get("имена"):
+        lines.append("- Имена конфигурации (Метаданные.Имя): %s." % ", ".join(profile["имена"]))
+    if profile.get("мин_версия"):
+        lines.append("- Инструкции рассчитаны на версии от %s." % profile["мин_версия"])
+    flags = profile.get("признаки") or {}
+    have = [name for name, on in flags.items() if on]
+    absent = [name for name, on in flags.items() if on is False]
+    if have or absent:
+        lines.append("- Регистры: есть %s%s." % (", ".join(have) or "—",
+                                                   ("; нет " + ", ".join(absent)) if absent else ""))
+    if profile.get("план_счетов"):
+        lines.append("- План счетов: %s%s." % (profile["план_счетов"],
+                                                ("; виды субконто: " + profile["виды_субконто"])
+                                                if profile.get("виды_субконто") else ""))
+    if profile.get("без_кода"):
+        lines.append("- Настраивается без программирования: %s." % ", ".join(profile["без_кода"]))
+    return "\n".join(lines)
 
 
 PACK_TITLES = {"where_is.md": "Где это в 1С", "objects.md": "Объекты и документы",
@@ -215,21 +286,32 @@ def render_cheats(cheats):
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
-def tool_get_instructions(manifest, args):
+def pack_track(manifest, args):
+    """(направление с пакетом, None) или (None, ответ-ошибка)."""
     code = str(args.get("track") or "").strip()
     packs = tracks_with_packs(manifest)
     with_profile = sorted(c for c, t in packs.items() if t["инструкции"].get("профиль"))
     if not code:
-        return {"ошибка": "нужен код направления (track), например bp; есть: %s"
-                          % ", ".join(with_profile)}
+        return None, {"ошибка": "нужен код направления (track), например bp; есть: %s"
+                                % ", ".join(with_profile)}
     track = packs.get(code)
     if track is None or not track["инструкции"].get("профиль"):
-        return {"ошибка": "у направления «%s» нет пакета инструкций; есть: %s"
-                          % (code, ", ".join(with_profile))}
+        return None, {"ошибка": "у направления «%s» нет пакета инструкций; есть: %s"
+                                % (code, ", ".join(with_profile))}
+    return track, None
+
+
+def tool_get_instructions(manifest, args):
+    track, error = pack_track(manifest, args)
+    if error:
+        return error
+    code = track["код"]
     chain = extends_chain(manifest, code)
-    parts, chips = read_parts(manifest, chain)
+    parts = read_parts(manifest, chain)
+    chips = read_chips(manifest, ["core"] + chain if "core" not in chain else chain)
     title = "Инструкции по конфигурации: %s" % track["название"]
-    text = render_parts(title, parts, chain)
+    text = render_parts(title, parts, chain).replace("# %s\n\n" % title,
+                                                      "# %s\n\n%s\n\n" % (title, render_profile(track)), 1)
     result = {
         "направление": code,
         "название": track["название"],
@@ -239,6 +321,9 @@ def tool_get_instructions(manifest, args):
         "расширяет": chain[:-1],
         "части": parts,
         "чипы": chips,
+        "файлы_по_запросу": sorted({item["имя"] for c in chain
+                                     for item in tracks_with_packs(manifest)[c]["инструкции"]["файлы"]
+                                     if item["имя"] in FILE_TOOLS and item["имя"] not in PROMPT_FILES}),
     }
     if args.get("include_core") is True:
         cheats = cheats_of(manifest, "core")
@@ -248,6 +333,29 @@ def tool_get_instructions(manifest, args):
     result["текст"] = text
     result["размер"] = len(text.encode("utf-8"))
     return result
+
+
+def tool_get_instructions_file(manifest, args):
+    track, error = pack_track(manifest, args)
+    if error:
+        return error
+    name = str(args.get("file") or "").strip()
+    if name not in FILE_TOOLS:
+        return {"ошибка": "file — один из: %s" % ", ".join(FILE_TOOLS)}
+    chain = extends_chain(manifest, track["код"])
+    if args.get("with_base") is False:
+        chain = chain[-1:]
+    parts = read_parts(manifest, chain, names=(name,), compact=False)
+    if not parts:
+        return {"ошибка": "у направления «%s» нет файла %s" % (track["код"], name)}
+    title = "%s: %s" % (PACK_TITLES.get(name, name), track["название"])
+    text = render_parts(title, parts, chain)
+    return {"направление": track["код"], "файл": name,
+            "ревизия": getattr(manifest, "revision", snap.EMBEDDED),
+            "расширяет": chain[:-1], "части": parts, "текст": text,
+            "размер": len(text.encode("utf-8")),
+            "примечание": "строки с пометкой [проверить] не подтверждены — не выдавать как факт"
+            if packtext.UNVERIFIED in text else None}
 
 
 def tool_get_cheats(manifest, args):
@@ -264,5 +372,6 @@ def tool_get_cheats(manifest, args):
 INSTRUCTION_HANDLERS = {
     "match_config": tool_match_config,
     "get_instructions": tool_get_instructions,
+    "get_instructions_file": tool_get_instructions_file,
     "get_cheats": tool_get_cheats,
 }
