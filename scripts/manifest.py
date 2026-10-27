@@ -27,13 +27,23 @@
   8. рецепты `tracks/<код>/guides/how-NNN.md` — разделы «рецепты» (верх и у
      направления): id по формату how-001 и сквозной уникальности, непустая
      `задача`, источник/check по тем же правилам, `правила` — список id
-     существующих правил.
+     существующих правил;
+  9. пакет инструкций по конфигурации `tracks/<код>/profile.json` + `where_is.md`,
+     `objects.md`, `notes.md`, `faq.md`, `chips.json` и шпаргалки
+     `tracks/<код>/cheats/*.md` — ключ «инструкции» у направления: профиль по
+     схеме (см. PROFILE_* ниже), `расширяет` только на направление с пакетом,
+     чипы — JSON-список записей с id/заголовок/текст, потолок размера PACK_LIMIT
+     (пакет уходит в системный промпт ИИ-помощника целиком).
 
 Использование:
   scripts/manifest.py             собрать manifest.json
   scripts/manifest.py --проверить проверить без записи (1 при расхождениях)
+  scripts/manifest.py --корень ДИР [--проверить]
+                                  работать с другим деревом набора (сетевой сервис
+                                  проверяет так свежую ревизию знаний своим кодом)
 """
 
+import hashlib
 import json
 import os
 import re
@@ -42,6 +52,21 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TRACKS = os.path.join(ROOT, "tracks")
 MANIFEST = os.path.join(ROOT, "manifest.json")
+
+# Пакет инструкций по конфигурации (для ИИ-помощника, который работает в базе 1С).
+PACK_FILES = ["where_is.md", "objects.md", "notes.md", "faq.md", "chips.json"]
+PACK_TITLES = {"where_is.md": "Где это в 1С", "objects.md": "Объекты и документы",
+               "notes.md": "Особенности конфигурации", "faq.md": "Типовые вопросы"}
+CHEATS_DIR = "cheats"
+PACK_LIMIT = 24 * 1024          # байт на пакет направления (без базового) и отдельно на шпаргалки
+PROFILE_REQUIRED = ["семейство", "имена", "тема"]
+PROFILE_OPTIONAL = ["синоним_re", "мин_версия", "поставщики", "признаки", "план_счетов",
+                    "виды_субконто", "без_кода", "расширяет"]
+PROFILE_FLAGS = ["бухгалтерия", "накопление", "расчёт"]
+VERSION_RE = re.compile(r"^\d+(\.\d+){1,3}$")
+FAMILY_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+CHIP_REQUIRED = ["id", "заголовок", "текст"]
+CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 CATEGORIES = ["запросы", "модули", "формы-xml", "метаданные", "макеты", "процесс",
               "архитектура", "интерфейс", "данные", "интеграция",
@@ -187,19 +212,234 @@ def check_checks(data, where, errors):
     return checks
 
 
-def collect_tools(rule_ids, errors):
+def read_pack_text(path, rel, errors):
+    """Текст файла пакета: UTF-8 без управляющих символов. None при ошибке."""
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read()
+        text = raw.decode("utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        errors.append("%s: не читается как UTF-8 (%s)" % (rel, error))
+        return None
+    if CONTROL_RE.search(text):
+        errors.append("%s: управляющие символы в тексте" % rel)
+        return None
+    return text.replace("\r\n", "\n")
+
+
+def file_digest(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
+def check_profile(profile, where, code, errors):
+    """Схема profile.json: закрытый набор ключей, типы и форматы значений."""
+    if not isinstance(profile, dict):
+        errors.append("%s: profile.json должен быть объектом JSON" % where)
+        return
+    for key in PROFILE_REQUIRED:
+        if key not in profile:
+            errors.append("%s: нет поля «%s»" % (where, key))
+    for key in profile:
+        if key not in PROFILE_REQUIRED and key not in PROFILE_OPTIONAL:
+            errors.append("%s: неизвестное поле «%s» (есть: %s)"
+                          % (where, key, ", ".join(PROFILE_REQUIRED + PROFILE_OPTIONAL)))
+    family = profile.get("семейство", "")
+    if not isinstance(family, str) or not FAMILY_RE.match(family):
+        errors.append("%s: «семейство» — латиница, цифры, дефис (например bp), а не «%s»"
+                      % (where, family))
+    names = profile.get("имена")
+    if not isinstance(names, list) or not names \
+            or not all(isinstance(item, str) and item.strip() for item in names):
+        errors.append("%s: «имена» — непустой список строк (Метаданные.Имя конфигурации)" % where)
+    else:
+        for item in names:
+            if re.search(r"\s", item):
+                errors.append("%s: имя конфигурации «%s» с пробелом — это синоним, а не Имя"
+                              % (where, item))
+    topic = profile.get("тема")
+    if not isinstance(topic, str) or not topic.strip():
+        errors.append("%s: «тема» — непустая строка (учёт и налоги, торговля и склад…)" % where)
+    synonym = profile.get("синоним_re")
+    if synonym is not None:
+        if not isinstance(synonym, str):
+            errors.append("%s: «синоним_re» должен быть строкой" % where)
+        else:
+            try:
+                re.compile(synonym)
+            except re.error as error:
+                errors.append("%s: «синоним_re» не компилируется: %s" % (where, error))
+    version = profile.get("мин_версия")
+    if version is not None and (not isinstance(version, str) or not VERSION_RE.match(version)):
+        errors.append("%s: «мин_версия» вида 3.0.150, а не «%s»" % (where, version))
+    for key in ("поставщики", "без_кода"):
+        value = profile.get(key)
+        if value is not None and (not isinstance(value, list)
+                                  or not all(isinstance(item, str) and item.strip()
+                                             for item in value)):
+            errors.append("%s: «%s» — список строк" % (where, key))
+    flags = profile.get("признаки")
+    if flags is not None:
+        if not isinstance(flags, dict) or not all(isinstance(v, bool) for v in flags.values()):
+            errors.append("%s: «признаки» — объект с булевыми значениями" % where)
+        else:
+            for key in flags:
+                if key not in PROFILE_FLAGS:
+                    errors.append("%s: неизвестный признак «%s» (есть: %s)"
+                                  % (where, key, ", ".join(PROFILE_FLAGS)))
+    for key in ("план_счетов", "виды_субконто"):
+        value = profile.get(key)
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            errors.append("%s: «%s» — непустая строка" % (where, key))
+    extends = profile.get("расширяет")
+    if extends is not None:
+        if not isinstance(extends, str) or not extends.strip():
+            errors.append("%s: «расширяет» — код направления" % where)
+        elif extends == code:
+            errors.append("%s: направление не может расширять само себя" % where)
+
+
+def check_chips(text, where, errors):
+    """chips.json — список подсказок-чипов: id, заголовок, текст (+ необязательная тема)."""
+    try:
+        chips = json.loads(text)
+    except ValueError as error:
+        errors.append("%s: не JSON (%s)" % (where, error))
+        return
+    if not isinstance(chips, list):
+        errors.append("%s: нужен список чипов" % where)
+        return
+    seen = set()
+    for position, chip in enumerate(chips):
+        if not isinstance(chip, dict):
+            errors.append("%s: чип №%d не объект" % (where, position + 1))
+            continue
+        for key in CHIP_REQUIRED:
+            if not isinstance(chip.get(key), str) or not chip[key].strip():
+                errors.append("%s: чип №%d без поля «%s»" % (where, position + 1, key))
+        for key in chip:
+            if key not in CHIP_REQUIRED and key != "тема":
+                errors.append("%s: чип №%d — неизвестное поле «%s»" % (where, position + 1, key))
+        if chip.get("id") in seen:
+            errors.append("%s: id чипа «%s» повторяется" % (where, chip.get("id")))
+        seen.add(chip.get("id"))
+
+
+def collect_pack(code, track_dir, errors):
+    """Пакет инструкций направления: профиль, файлы пакета и шпаргалки. None, если ничего нет.
+
+    Файлы пакета без profile.json — ошибка: без паспорта конфигурацию не узнать,
+    а значит, пакет никому не достанется. Шпаргалки (`cheats/`) профиля не требуют.
+    Ссылку «расширяет» проверяет вызывающий после сбора всех направлений.
+    """
+    profile, files, cheats = None, [], []
+    profile_path = os.path.join(track_dir, "profile.json")
+    if os.path.exists(profile_path):
+        where = "%s/profile.json" % code
+        text = read_pack_text(profile_path, where, errors)
+        if text is not None:
+            try:
+                profile = json.loads(text)
+            except ValueError as error:
+                errors.append("%s: не JSON (%s)" % (where, error))
+                profile = None
+            else:
+                check_profile(profile, where, code, errors)
+                if not isinstance(profile, dict):
+                    profile = None
+    for name in PACK_FILES:
+        path = os.path.join(track_dir, name)
+        if not os.path.exists(path):
+            continue
+        where = "%s/%s" % (code, name)
+        text = read_pack_text(path, where, errors)
+        if text is None:
+            continue
+        if name == "chips.json":
+            check_chips(text, where, errors)
+        files.append({"имя": name, "файл": "tracks/%s/%s" % (code, name),
+                      "sha": file_digest(text), "размер": len(text.encode("utf-8"))})
+    orphans = [item["имя"] for item in files if item["имя"] != "objects.md"]
+    if orphans and not os.path.exists(profile_path):
+        # objects.md — ещё и карта объектов для программиста, он живёт и без профиля.
+        errors.append("%s: файлы пакета (%s) без profile.json — конфигурацию не определить"
+                      % (code, ", ".join(orphans)))
+    cheats_dir = os.path.join(track_dir, CHEATS_DIR)
+    if os.path.isdir(cheats_dir):
+        for name in sorted(os.listdir(cheats_dir)):
+            if not name.endswith(".md") or name == "README.md":
+                continue
+            where = "%s/%s/%s" % (code, CHEATS_DIR, name)
+            text = read_pack_text(os.path.join(cheats_dir, name), where, errors)
+            if text is None:
+                continue
+            title = name[:-3]
+            for line in text.splitlines():
+                if line.startswith("# "):
+                    title = line[2:].strip()
+                    break
+            cheats.append({"имя": name[:-3], "заголовок": title,
+                           "файл": "tracks/%s/%s/%s" % (code, CHEATS_DIR, name),
+                           "sha": file_digest(text), "размер": len(text.encode("utf-8"))})
+    if profile is None and not files and not cheats:
+        return None
+    size = sum(item["размер"] for item in files)
+    cheats_size = sum(item["размер"] for item in cheats)
+    if size > PACK_LIMIT:
+        errors.append("%s: пакет инструкций %d байт больше потолка %d — он целиком идёт в промпт"
+                      % (code, size, PACK_LIMIT))
+    if cheats_size > PACK_LIMIT:
+        errors.append("%s: шпаргалки %d байт больше потолка %d" % (code, cheats_size, PACK_LIMIT))
+    return {
+        "профиль": profile,
+        "расширяет": (profile or {}).get("расширяет"),
+        "файлы": files,
+        "шпаргалки": cheats,
+        "размер": size,
+        "размер_шпаргалок": cheats_size,
+    }
+
+
+def check_extends(tracks, errors):
+    """«расширяет» ведёт на направление с профилем; цепочка без циклов и не длиннее трёх."""
+    packs = {track["код"]: track.get("инструкции") for track in tracks}
+    for track in tracks:
+        pack = track.get("инструкции")
+        if not pack or not pack.get("расширяет"):
+            continue
+        chain, code = [track["код"]], pack["расширяет"]
+        while code:
+            if code in chain:
+                errors.append("%s/profile.json: цикл «расширяет»: %s" % (track["код"],
+                                                                        " -> ".join(chain + [code])))
+                break
+            target = packs.get(code)
+            if target is None or target.get("профиль") is None:
+                errors.append("%s/profile.json: «расширяет» ведёт на «%s», а там нет пакета с profile.json"
+                              % (track["код"], code))
+                break
+            chain.append(code)
+            if len(chain) > 3:
+                errors.append("%s/profile.json: цепочка «расширяет» длиннее трёх направлений"
+                              % track["код"])
+                break
+            code = target.get("расширяет")
+
+
+def collect_tools(rule_ids, errors, tools_dir=None):
     """Карточки инструментов tools/<группа>/<инструмент>.md (кроме _TEMPLATE.md)."""
     tools = []
-    if not os.path.isdir(TOOLS_DIR):
+    tools_dir = TOOLS_DIR if tools_dir is None else tools_dir
+    root = os.path.dirname(tools_dir)
+    if not os.path.isdir(tools_dir):
         return tools
     seen = set()
-    for current, dirs, files in os.walk(TOOLS_DIR):
+    for current, dirs, files in os.walk(tools_dir):
         dirs.sort()
         for name in sorted(files):
             if not name.endswith(".md") or name in ("_TEMPLATE.md", "README.md"):
                 continue
             path = os.path.join(current, name)
-            rel = os.path.relpath(path, ROOT).replace(os.sep, "/")
+            rel = os.path.relpath(path, root).replace(os.sep, "/")
             data, _ = read_document(path)
             if data is None:
                 errors.append("%s: нет фронтматтера" % rel)
@@ -305,14 +545,23 @@ def collect_guides(code, track_dir, seen_ids, errors):
     return guides
 
 
-def collect():
-    """Разбор дерева tracks. Возвращает (манифест, список ошибок)."""
+def collect(root=None):
+    """Разбор дерева tracks. Возвращает (манифест, список ошибок).
+
+    `root` — корень набора; по умолчанию репозиторий, в котором лежит скрипт.
+    Сетевой сервис передаёт сюда свежую ревизию знаний: проверяет её этим,
+    своим кодом, а не скриптом из той ревизии.
+    """
+    tracks_dir = TRACKS if root is None else os.path.join(root, "tracks")
+    root = ROOT if root is None else root
     errors, tracks, rules, guides = [], [], [], []
     seen_ids = set()
-    for code in sorted(os.listdir(TRACKS)):
-        track_dir = os.path.join(TRACKS, code)
-        if not os.path.isdir(track_dir):
-            continue
+    if not os.path.isdir(tracks_dir):
+        return None, ["%s: нет каталога tracks" % root]
+    for code in sorted(os.listdir(tracks_dir)):
+        track_dir = os.path.join(tracks_dir, code)
+        if not os.path.isdir(track_dir) or code.startswith("_"):
+            continue  # «_PACK_TEMPLATE» и подобные заготовки — не направления
         passport_path = os.path.join(track_dir, "track.md")
         if not os.path.exists(passport_path):
             errors.append("%s: нет паспорта track.md" % code)
@@ -391,7 +640,9 @@ def collect():
         entry["карта_объектов"] = ("tracks/%s/objects.md" % code
                                    if os.path.exists(os.path.join(track_dir, "objects.md"))
                                    else None)
+        entry["инструкции"] = collect_pack(code, track_dir, errors)
         tracks.append(entry)
+    check_extends(tracks, errors)
 
     by_object = {}
     for rule in rules:
@@ -410,7 +661,8 @@ def collect():
     guides.sort(key=lambda guide: guide.get("id", ""))
 
     manual_only = [rule["id"] for rule in rules if rule["виды_проверок"] == ["manual"]]
-    tools = collect_tools({rule["id"] for rule in rules}, errors)
+    tools = collect_tools({rule["id"] for rule in rules}, errors,
+                          tools_dir=None if root == ROOT else os.path.join(root, "tools"))
     manifest = {
         "версия": 1,
         "направлений": len(tracks),
@@ -423,22 +675,44 @@ def collect():
         "инструменты": tools,
         "рецептов": len(guides),
         "рецепты": guides,
+        "инструкций": sum(1 for track in tracks
+                          if track["инструкции"] and track["инструкции"]["профиль"]),
     }
     return manifest, errors
 
 
+def render(manifest):
+    """Текст manifest.json: один и тот же для сборки, проверки и сетевого сервиса."""
+    return json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
+
+
+def parse_root(argv):
+    """--корень ДИР (или --root ДИР): другое дерево набора. None — своё."""
+    for position, arg in enumerate(argv):
+        if arg in ("--корень", "--root") and position + 1 < len(argv):
+            return os.path.abspath(argv[position + 1])
+        for prefix in ("--корень=", "--root="):
+            if arg.startswith(prefix):
+                return os.path.abspath(arg[len(prefix):])
+    return None
+
+
 def main():
     dry_run = "--проверить" in sys.argv[1:] or "--check" in sys.argv[1:]
-    manifest, errors = collect()
-    body = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
+    root = parse_root(sys.argv[1:])
+    manifest_path = MANIFEST if root is None else os.path.join(root, "manifest.json")
+    manifest, errors = collect(root)
 
     for error in errors:
         print("ОШИБКА: %s" % error)
+    if manifest is None:
+        return 1
+    body = render(manifest)
 
     if dry_run:
         stale = True
-        if os.path.exists(MANIFEST):
-            with open(MANIFEST, encoding="utf-8") as handle:
+        if os.path.exists(manifest_path):
+            with open(manifest_path, encoding="utf-8") as handle:
                 stale = handle.read() != body
         if stale:
             print("ОШИБКА: manifest.json разошёлся с правилами — пересобрать scripts/manifest.py")
@@ -451,7 +725,7 @@ def main():
         print("Манифест не записан: сначала разобрать ошибки выше.")
         return 1
 
-    with open(MANIFEST, "w", encoding="utf-8") as handle:
+    with open(manifest_path, "w", encoding="utf-8") as handle:
         handle.write(body)
     print("Записан manifest.json: направлений %d, правил %d, только человеком ловятся %d, "
           "инструментов %d, рецептов %d"
