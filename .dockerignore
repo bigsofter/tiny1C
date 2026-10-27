@@ -1,0 +1,14 @@
+.git
+.github
+.claude-plugin
+__pycache__
+*.pyc
+.DS_Store
+dist/
+fixtures/
+tests/
+hooks/
+skills/
+scripts/*
+!scripts/manifest.py
+tracks/_PACK_TEMPLATE/
