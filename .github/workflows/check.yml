@@ -36,7 +36,47 @@ jobs:
               tools=json.loads(sys.stdin.readline())['result']['tools']; \
               print('инструментов:', len(tools)); \
               sys.exit(0 if len(tools) == 10 else 1)"
+      - name: С флагом --tools instructions инструментов 12
+        run: |
+          echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+            | python3 mcp/server.py --tools instructions | python3 -c "import json,sys; \
+              tools=json.loads(sys.stdin.readline())['result']['tools']; \
+              print('инструментов:', len(tools)); \
+              sys.exit(0 if len(tools) == 12 else 1)"
       - name: Договорённость с порталом TinyCIO
         run: python3 -m unittest tests.test_portal_contract
-      - name: Инструменты на фикстурах (golden)
+      - name: Фикстура знаний сетевого режима собрана
+        run: python3 scripts/manifest.py --проверить --корень tests/fixtures/knowledge
+      - name: Инструменты на фикстурах (golden), сетевой режим, подгрузка знаний
         run: python3 scripts/tools-check.py
+
+  image:
+    # Сетевой режим: образ собирается и отвечает на /healthz со встроенной копией набора.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Сборка образа
+        run: docker build -t tiny1c:ci .
+      - name: Контейнер отвечает на /healthz и tools/list
+        run: |
+          docker run -d --name tiny1c -p 8111:8111 -e TINY1C_SERVICE_TOKEN=ci-token \
+            -e TINY1C_DATA= tiny1c:ci
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:8111/healthz >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:8111/healthz
+          echo
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8111/mcp \
+            -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
+          test "$code" = 401
+          curl -sf -X POST http://localhost:8111/mcp -H 'X-Service-Token: ci-token' \
+            -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+            -H 'MCP-Protocol-Version: 2025-11-25' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+            | python3 -c "import json,sys; \
+              tools=json.loads(sys.stdin.read())['result']['tools']; \
+              print('инструментов:', len(tools)); \
+              sys.exit(0 if len(tools) == 12 else 1)"
+          docker logs tiny1c
+          docker rm -f tiny1c
