@@ -98,6 +98,19 @@ class ServerTools(unittest.TestCase):
             self.assertEqual(10, len(names), (args, env))
             self.assertEqual("where_is", names[-1])
 
+    def test_instructions_group_is_opt_in(self):
+        # Группа instructions (помощник в базе 1С) включается флагом; без него набор прежний.
+        names = tool_names(("--tools", "instructions"))
+        self.assertEqual(13, len(names))
+        self.assertEqual(["match_config", "get_instructions", "get_instructions_file", "get_cheats"],
+                         names[-4:])
+        both = tool_names((), {"TINY1C_TOOLS": "offline,instructions"})
+        self.assertEqual(14, len(both))
+        self.assertIn("where_is", both)
+        answer = call([{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": {"name": "get_cheats", "arguments": {}}}])[0]
+        self.assertIn("error", answer)  # без флага инструмента нет
+
     def test_checklist_knows_external_processors(self):
         # Внешние обработки и отчёты (.epf/.erf) - своя категория плюс общие для модулей, форм и макетов.
         for name in ("Печать.epf", "Отчет.ERF"):

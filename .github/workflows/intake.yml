@@ -75,8 +75,10 @@ jobs:
           step "Гигиена публикации" python3 scripts/hygiene.py
           step "MCP-сервер отвечает (9 инструментов)" mcp_tools 9
           step "С флагом --tools offline инструментов 10" mcp_tools 10 --tools offline
+          step "С флагом --tools instructions инструментов 13" mcp_tools 13 --tools instructions
           step "Договорённость с порталом TinyCIO" python3 -m unittest tests.test_portal_contract
-          step "Инструменты на фикстурах (golden)" python3 scripts/tools-check.py
+          step "Фикстура знаний сетевого режима собрана" python3 scripts/manifest.py --проверить --корень tests/fixtures/knowledge
+          step "Инструменты на фикстурах (golden), сетевой режим, подгрузка знаний" python3 scripts/tools-check.py
           cat "$log"
 
           own=false

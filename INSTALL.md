@@ -14,7 +14,8 @@
 ```
 
 Всё остальное на этой странице — как записать эти три строки в конкретном
-клиенте, и что делать там, где MCP не поддерживается вовсе.
+клиенте, что делать там, где MCP не поддерживается вовсе, и как поднять набор
+сетевым сервисом для серверных клиентов (раздел про streamable HTTP ниже).
 
 ---
 
@@ -188,6 +189,38 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | python3 mcp/server.py
 ```
 
 В ответ должен прийти JSON с девятью инструментами (с `--tools offline` - с десятью).
+
+---
+
+## Сервис во внутренней сети (streamable HTTP)
+
+Когда клиент не может запустить локальный процесс — например, серверный
+сервис в docker compose, — набор поднимается как сетевой MCP-сервис
+(`mcp/httpd.py`, образ — `Dockerfile`). Это служба внутренней сети: наружу не
+публикуется, доступ по сервис-токену.
+
+```yaml
+# фрагмент docker-compose.yml у того, кто подключается
+tiny1c-mcp:
+  image: tiny1c:<закреплённая ревизия>     # собран из Dockerfile набора на этой ревизии
+  environment:
+    TINY1C_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
+    TINY1C_SYNC_INTERVAL: "300"            # знания из main подтягиваются сами
+  volumes:
+    - tiny1c_data:/data                    # кэш ревизий знаний
+  # ports: не нужны — к нему ходят по docker-DNS: http://tiny1c-mcp:8111/mcp
+```
+
+Клиент шлёт `POST http://tiny1c-mcp:8111/mcp` с заголовками `X-Service-Token`,
+`Content-Type: application/json`, `Accept: application/json, text/event-stream`
+и `MCP-Protocol-Version: 2025-11-25`; тело — JSON-RPC (`initialize`,
+`tools/list`, `tools/call`). Сессий нет: каждый запрос самостоятелен. Группа
+`instructions` (`match_config`, `get_instructions`, `get_instructions_file`,
+`get_cheats`) в этом режиме включена по умолчанию. Проверка живости — `GET /healthz` без токена.
+
+Версия знаний в ответах — поле `ревизия` (sha коммита `main`) у
+`get_instructions`/`get_cheats` и в `/healthz`; версия кода — только версия
+образа. Обновить код = выкатить новый образ; обновить знания = слить PR в `main`.
 
 ---
 

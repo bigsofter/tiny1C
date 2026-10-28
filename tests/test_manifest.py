@@ -2,6 +2,7 @@
 """Проверки карточек инструментов в scripts/manifest.py."""
 
 import importlib.util
+import json
 import os
 import shutil
 import tempfile
@@ -153,6 +154,116 @@ class Guides(unittest.TestCase):
         finally:
             manifest.TRACKS = saved
             shutil.rmtree(tmp)
+
+
+class InstructionPacks(unittest.TestCase):
+    """Пакет инструкций по конфигурации: схема profile.json, чипы, «расширяет», потолок размера."""
+
+    GOOD = {"семейство": "bp", "имена": ["БухгалтерияПредприятия"], "тема": "учёт и налоги",
+            "синоним_re": "Бухгалтерия предприятия", "мин_версия": "3.0.150",
+            "поставщики": ["Фирма \"1С\""], "признаки": {"бухгалтерия": True},
+            "план_счетов": "Хозрасчетный", "без_кода": ["Обработка.X"]}
+
+    def tree(self, profile=None, files=None, extra_tracks=()):
+        tmp = tempfile.mkdtemp(prefix="tiny1c-pack-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        tracks = os.path.join(tmp, "tracks")
+        for code, kind in (("bp", "типовая"),) + tuple(extra_tracks):
+            os.makedirs(os.path.join(tracks, code))
+            with open(os.path.join(tracks, code, "track.md"), "w", encoding="utf-8") as handle:
+                handle.write("---\nкод: %s\nназвание: %s\nвид: %s\nплатформы: [8.3]\n"
+                             "статус: ведётся\n---\n" % (code, code, kind))
+        if profile is not None:
+            with open(os.path.join(tracks, "bp", "profile.json"), "w", encoding="utf-8") as handle:
+                handle.write(profile if isinstance(profile, str)
+                             else json.dumps(profile, ensure_ascii=False))
+        for name, text in (files or {}).items():
+            with open(os.path.join(tracks, "bp", name), "w", encoding="utf-8") as handle:
+                handle.write(text)
+        return tmp
+
+    def errors(self, **kw):
+        built, errors = manifest.collect(root=self.tree(**kw))
+        return built, errors
+
+    def test_good_pack_is_indexed(self):
+        built, errors = self.errors(profile=self.GOOD, files={"where_is.md": "| а | б |\n",
+                                                            "chips.json": '[{"id": "a", "заголовок": "б", "текст": "в"}]'})
+        self.assertEqual([], errors)
+        pack = built["направления"][0]["инструкции"]
+        self.assertEqual("bp", pack["профиль"]["семейство"])
+        self.assertEqual(["where_is.md", "chips.json"], [item["имя"] for item in pack["файлы"]])
+        self.assertTrue(all(len(item["sha"]) == 12 for item in pack["файлы"]))
+        self.assertEqual(1, built["инструкций"])
+        self.assertIsNone(pack["расширяет"])
+
+    def test_track_without_pack_has_null(self):
+        built, errors = self.errors()
+        self.assertEqual([], errors)
+        self.assertIsNone(built["направления"][0]["инструкции"])
+        self.assertEqual(0, built["инструкций"])
+
+    def test_unknown_and_missing_fields(self):
+        _, errors = self.errors(profile=dict(self.GOOD, лишнее=1))
+        self.assertTrue(any("неизвестное поле «лишнее»" in e for e in errors), errors)
+        bad = dict(self.GOOD)
+        del bad["имена"]
+        _, errors = self.errors(profile=bad)
+        self.assertTrue(any("«имена»" in e for e in errors), errors)
+
+    def test_value_formats(self):
+        for key, value, marker in (("имена", ["Бухгалтерия предприятия"], "пробел"),
+                                   ("имена", [], "непустой"),
+                                   ("семейство", "БП", "латиница"),
+                                   ("мин_версия", "3", "3.0.150"),
+                                   ("синоним_re", "(", "не компилируется"),
+                                   ("признаки", {"бухгалтерия": "да"}, "булев"),
+                                   ("признаки", {"прочее": True}, "неизвестный признак"),
+                                   ("поставщики", "Фирма", "список строк"),
+                                   ("расширяет", "bp", "само себя")):
+            _, errors = self.errors(profile=dict(self.GOOD, **{key: value}))
+            self.assertTrue(any(marker in e for e in errors), (key, value, errors))
+
+    def test_pack_files_need_profile_but_objects_md_does_not(self):
+        _, errors = self.errors(files={"objects.md": "карта\n"})
+        self.assertEqual([], errors)
+        _, errors = self.errors(files={"notes.md": "заметка\n"})
+        self.assertTrue(any("без profile.json" in e for e in errors), errors)
+
+    def test_chips_schema(self):
+        for text, marker in ('{"a": 1}', "список"), ('[{"id": "a"}]', "«заголовок»"), \
+                            ('[{"id": "a", "заголовок": "б", "текст": "в", "x": 1}]', "неизвестное поле"), \
+                            ('[{"id": "a", "заголовок": "б", "текст": "в"}, {"id": "a", "заголовок": "б", "текст": "в"}]', "повторяется"), \
+                            ("[", "не JSON"):
+            _, errors = self.errors(profile=self.GOOD, files={"chips.json": text})
+            self.assertTrue(any(marker in e for e in errors), (text, errors))
+
+    def test_extends_must_point_to_pack(self):
+        _, errors = self.errors(profile=dict(self.GOOD, расширяет="ut"), extra_tracks=(("ut", "типовая"),))
+        self.assertTrue(any("нет пакета с profile.json" in e for e in errors), errors)
+        _, errors = self.errors(profile=dict(self.GOOD, расширяет="нет"))
+        self.assertTrue(any("«нет»" in e for e in errors), errors)
+
+    def test_size_ceiling(self):
+        _, errors = self.errors(profile=self.GOOD, files={"notes.md": "я" * (manifest.PACK_LIMIT // 2 + 1)})
+        self.assertTrue(any("больше потолка" in e for e in errors), errors)
+
+    def test_template_dir_is_skipped_and_fixture_is_valid(self):
+        built, errors = manifest.collect()
+        self.assertEqual([], errors)
+        self.assertNotIn("_PACK_TEMPLATE", [t["код"] for t in built["направления"]])
+        fixture = os.path.join(ROOT, "tests", "fixtures", "knowledge")
+        built, errors = manifest.collect(root=fixture)
+        self.assertEqual([], errors)
+        self.assertEqual(["ut"], [t["инструкции"]["расширяет"] for t in built["направления"]
+                                  if t["код"] == "ka"])
+        with open(os.path.join(fixture, "manifest.json"), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), manifest.render(built), "пересобрать: scripts/manifest.py --корень tests/fixtures/knowledge")
+
+    def test_root_option(self):
+        self.assertEqual(os.path.abspath("x"), manifest.parse_root(["--корень", "x"]))
+        self.assertEqual(os.path.abspath("y"), manifest.parse_root(["--проверить", "--root=y"]))
+        self.assertIsNone(manifest.parse_root(["--проверить"]))
 
 
 if __name__ == "__main__":
