@@ -18,6 +18,11 @@
 Рецепты («как сделать», каталог `tracks/<направление>/guides/`) портал знает с выката
 этапа 2: вид источника `практика`, обязательные поля рецепта, разделы шаблона
 `tracks/_GUIDE_TEMPLATE.md`, ключ манифеста `рецепты` и инструменты `lookup_guide`/`get_guide`.
+
+Навыки помощника (`tracks/<код>/skills/*.md`, инструменты `list_skills` и `get_skill`) читает сервис
+ai1c-service портала и показывает бухгалтеру в списке «От TinyCIO»: имена ключей ответов, ключи шапки
+`нужно` и `запуск`, виды параметров и потолки зафиксированы ниже. Сужать их и менять имена - сначала
+портал; расширять можно (тест требует лишь, чтобы прежнее осталось).
 """
 
 import importlib.util
@@ -53,6 +58,14 @@ GUIDE_TEMPLATE_SECTIONS = ["Шаги", "Проверка результата", 
 TOOL_NAMES = {"list_tracks", "lookup_rule", "get_rule", "lookup_guide", "get_guide",
               "rules_by_category", "rules_for_object", "checklist", "glossary_lookup", "where_is"}
 TRACK_KEYS = ["код", "название", "вид", "конфигурации", "правила"]
+INSTRUCTION_TOOL_NAMES = ["match_config", "get_instructions", "get_instructions_file", "get_cheats",
+                          "list_skills", "get_skill"]
+SKILL_REQUIRED_MAX = ["имя", "заголовок", "когда", "источник"]
+SKILL_HEADER_FIXED = ["имя", "заголовок", "когда", "источник", "нужно", "запуск"]
+SKILL_LIST_KEYS = ["name", "title", "when", "needs", "run", "size", "sha"]
+SKILL_RUN_KEYS = ["text", "params"]
+SKILL_PARAM_KEYS = ["key", "label", "kind", "required"]
+SKILL_PARAM_KINDS = ["text", "inn", "period"]
 
 
 def read(*parts):
@@ -114,6 +127,50 @@ class PortalContract(unittest.TestCase):
                               check=True, cwd=ROOT)
         names = {tool["name"] for tool in json.loads(done.stdout.decode("utf-8"))["result"]["tools"]}
         self.assertEqual(TOOL_NAMES, names)
+
+    def test_instructions_group_has_skill_tools(self):
+        request = '{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n'
+        done = subprocess.run([sys.executable, SERVER, "--tools", "instructions"],
+                              input=request.encode("utf-8"), stdout=subprocess.PIPE, timeout=60,
+                              check=True, cwd=ROOT)
+        names = [tool["name"] for tool in json.loads(done.stdout.decode("utf-8"))["result"]["tools"]]
+        self.assertEqual(15, len(names))
+        self.assertEqual(INSTRUCTION_TOOL_NAMES, names[-6:])
+
+    def test_skill_contract(self):
+        for field in SKILL_HEADER_FIXED:
+            self.assertIn(field, manifest_module.SKILL_REQUIRED + manifest_module.SKILL_OPTIONAL, field)
+        self.assertEqual(set(SKILL_REQUIRED_MAX), set(manifest_module.SKILL_REQUIRED),
+                         "новое обязательное поле шапки навыка - сначала портал")
+        self.assertEqual(SKILL_RUN_KEYS, manifest_module.SKILL_RUN_KEYS)
+        self.assertEqual(set(SKILL_PARAM_KEYS),
+                         set(manifest_module.SKILL_PARAM_REQUIRED + manifest_module.SKILL_PARAM_OPTIONAL))
+        self.assertTrue(set(SKILL_PARAM_KINDS) <= set(manifest_module.SKILL_PARAM_KINDS))
+        self.assertGreaterEqual(manifest_module.SKILL_RUN_PARAMS, 4)
+        self.assertGreaterEqual(manifest_module.SKILL_RUN_TEXT_LIMIT, 300)
+        self.assertEqual(["access", "caps"], sorted(manifest_module.SKILL_NEEDS_KEYS))
+
+    def test_skill_answers_keep_their_keys(self):
+        sys.path.insert(0, os.path.join(ROOT, "mcp"))
+        try:
+            import snapshot
+            instructions = importlib.import_module("instructions")
+        finally:
+            sys.path.pop(0)
+        snap = snapshot.load(ROOT)
+        listing = instructions.tool_list_skills(snap, {"track": "bp"})
+        self.assertEqual(["revision", "skills"], sorted(listing))
+        self.assertTrue(listing["skills"])
+        for item in listing["skills"]:
+            self.assertEqual(sorted(SKILL_LIST_KEYS), sorted(item), item.get("name"))
+            self.assertEqual(["access", "caps"], sorted(item["needs"]))
+            if item["run"] is not None:
+                self.assertEqual(sorted(SKILL_RUN_KEYS), sorted(item["run"]))
+                for param in item["run"]["params"]:
+                    self.assertEqual(sorted(SKILL_PARAM_KEYS), sorted(param))
+        got = instructions.tool_get_skill(snap, {"track": "bp", "name": listing["skills"][0]["name"]})
+        self.assertTrue({"name", "text", "sha"} <= set(got))
+        self.assertIn("ошибка", instructions.tool_get_skill(snap, {"track": "bp", "name": "нет-такого"}))
 
     def test_dictionaries_only_grow(self):
         for name, fixed in (("CATEGORIES", CATEGORIES), ("SEVERITIES", SEVERITIES),

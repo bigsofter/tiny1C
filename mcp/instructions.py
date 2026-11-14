@@ -11,7 +11,14 @@
   get_instructions       пакет направления для промпта с учётом «расширяет» (ka/erp поверх ut):
                          профиль, where_is и notes в сжатом виде (mcp/packtext.py), чипы;
   get_instructions_file  один файл пакета целиком (objects.md, faq.md, where_is.md, notes.md) — по запросу;
-  get_cheats             шпаргалки платформы (tracks/core/cheats/*.md).
+  get_cheats             шпаргалки платформы (tracks/core/cheats/*.md);
+  list_skills            оглавление навыков направления (core, цепочка «расширяет», своё): имя, заголовок,
+                         «когда применять», что нужно, шаблон запуска человеком, размер, sha;
+  get_skill              текст одного навыка из этого набора по имени (tracks/<код>/skills/*.md).
+
+Навык — подробная инструкция «по запросу»: в промпте помощника остаётся только строка оглавления,
+а текст он забирает, когда навык нужен. Строки с пометкой [проверить] в get_skill не отдаются —
+неподтверждённый факт помощнику не даётся вовсе (как в get_instructions).
 
 Формат пакета и profile.json — README, «Пакет инструкций по конфигурации».
 Группа включается флагом `--tools instructions`; сетевой сервис включает её сам.
@@ -101,6 +108,40 @@ INSTRUCTION_TOOLS = [
             },
         },
         "annotations": {"title": "Шпаргалки платформы", "readOnlyHint": True,
+                        "destructiveHint": False, "openWorldHint": False},
+    },
+    {
+        "name": "list_skills",
+        "description": "Оглавление навыков помощника для направления: tracks/<код>/skills/*.md этого "
+                       "направления, его базового (по «расширяет») и общие из core. Для каждого — имя "
+                       "(name), заголовок (title), когда применять (when), что нужно от расширения "
+                       "(needs: caps, access), шаблон запуска человеком (run: text и params, либо null), "
+                       "размер текста в байтах (size) и sha. Ответ: {skills, revision}. Сам текст — "
+                       "get_skill.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "track": {"type": "string", "description": "код направления, например bp (можно core)"},
+            },
+            "required": ["track"],
+        },
+        "annotations": {"title": "Оглавление навыков", "readOnlyHint": True,
+                        "destructiveHint": False, "openWorldHint": False},
+    },
+    {
+        "name": "get_skill",
+        "description": "Текст одного навыка по имени из набора направления (его, базового и core). "
+                       "Ответ: {name, text, sha}; text — markdown-тело навыка без шапки, без строк с "
+                       "пометкой [проверить]. Имена — из list_skills.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "track": {"type": "string", "description": "код направления, например bp"},
+                "name": {"type": "string", "description": "имя навыка из list_skills"},
+            },
+            "required": ["track", "name"],
+        },
+        "annotations": {"title": "Текст навыка", "readOnlyHint": True,
                         "destructiveHint": False, "openWorldHint": False},
     },
 ]
@@ -369,9 +410,85 @@ def tool_get_cheats(manifest, args):
             "текст": text, "размер": len(text.encode("utf-8"))}
 
 
+def skill_set(manifest, code):
+    """Навыки направления для помощника: [(направление-источник, запись)], core первым, свои последними.
+
+    Одноимённый навык более конкретного направления закрывает навык базы по «расширяет»; имя из core
+    занять нельзя (проверяет манифест). Пустой список — у направления без навыков."""
+    packs = tracks_with_packs(manifest)
+    order = ["core"] + [c for c in extends_chain(manifest, code) if c != "core"]
+    found = {}
+    for source in order:
+        pack = packs.get(source)
+        for item in (pack["инструкции"].get("навыки") if pack else None) or []:
+            found[item["имя"]] = (source, item)
+    return sorted(found.values(), key=lambda pair: (order.index(pair[0]), pair[1]["имя"]))
+
+
+def skill_track(manifest, args):
+    """(код направления, None) или (None, ответ-ошибка): направление должно быть в манифесте."""
+    code = str(args.get("track") or "").strip()
+    known = sorted(track["код"] for track in manifest["направления"])
+    if not code:
+        return None, {"ошибка": "нужен код направления (track), например bp; есть: %s" % ", ".join(known)}
+    if code not in known:
+        return None, {"ошибка": "направления «%s» нет в наборе; есть: %s" % (code, ", ".join(known))}
+    return code, None
+
+
+def tool_list_skills(manifest, args):
+    code, error = skill_track(manifest, args)
+    if error:
+        return error
+    skills = []
+    for _, item in skill_set(manifest, code):
+        run = item.get("запуск")
+        skills.append({"name": item["имя"], "title": item["заголовок"], "when": item["когда"],
+                       "needs": item.get("нужно") or {"caps": [], "access": []},
+                       "run": run, "size": item["размер"], "sha": item["sha"]})
+    return {"skills": skills, "revision": getattr(manifest, "revision", snap.EMBEDDED)}
+
+
+def skill_body(manifest, rel):
+    """Тело навыка без шапки и без строк с пометкой [проверить]; (текст, сколько строк пропущено)."""
+    text = snap.read_text(manifest, rel).replace("\r\n", "\n")
+    lines = text.split("\n")
+    body = text
+    if lines and lines[0].strip() == "---" and "---" in [line.strip() for line in lines[1:]]:
+        body = "\n".join(lines[[line.strip() for line in lines[1:]].index("---") + 2:])
+    kept, dropped = [], 0
+    for line in body.strip("\n").split("\n"):
+        if packtext.UNVERIFIED in line:
+            dropped += 1
+        elif line.strip() or (kept and kept[-1].strip()):   # пустые строки не подряд
+            kept.append(line.rstrip())
+    return "\n".join(kept).strip("\n"), dropped
+
+
+def tool_get_skill(manifest, args):
+    code, error = skill_track(manifest, args)
+    if error:
+        return error
+    name = str(args.get("name") or "").strip()
+    available = skill_set(manifest, code)
+    if not name:
+        return {"ошибка": "нужно имя навыка (name); есть: %s" % (", ".join(i["имя"] for _, i in available) or "—")}
+    for _, item in available:
+        if item["имя"] == name:
+            text, dropped = skill_body(manifest, item["файл"])
+            result = {"name": name, "text": text, "sha": item["sha"]}
+            if dropped:
+                result["unverified_dropped"] = dropped
+            return result
+    return {"ошибка": "навыка «%s» нет у направления «%s»; есть: %s"
+                      % (name, code, ", ".join(i["имя"] for _, i in available) or "—")}
+
+
 INSTRUCTION_HANDLERS = {
     "match_config": tool_match_config,
     "get_instructions": tool_get_instructions,
     "get_instructions_file": tool_get_instructions_file,
     "get_cheats": tool_get_cheats,
+    "list_skills": tool_list_skills,
+    "get_skill": tool_get_skill,
 }
