@@ -156,9 +156,10 @@ class Pack(unittest.TestCase):
     def test_tools_list_and_handlers_via_server(self):
         tools, handlers = server.enabled_tools(self.snap, {"instructions"})
         names = [tool["name"] for tool in tools]
-        self.assertEqual(13, len(names))
-        self.assertEqual(["match_config", "get_instructions", "get_instructions_file", "get_cheats"], names[-4:])
-        for tool in tools[-4:]:
+        self.assertEqual(15, len(names))
+        self.assertEqual(["match_config", "get_instructions", "get_instructions_file", "get_cheats",
+                          "list_skills", "get_skill"], names[-6:])
+        for tool in tools[-6:]:
             self.assertTrue(tool["annotations"]["readOnlyHint"], tool["name"])
         answer = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                                 "params": {"name": "get_instructions", "arguments": {"track": "ka"}}},

@@ -117,11 +117,13 @@ class HttpServer(unittest.TestCase):
         self.assertEqual(200, status)
         self.assertTrue(headers["Content-Type"].startswith("application/json"))
         names = [tool["name"] for tool in json.loads(raw)["result"]["tools"]]
-        self.assertEqual(13, len(names))
+        self.assertEqual(15, len(names))
         self.assertIn("match_config", names)
         self.assertIn("get_instructions_file", names)
         self.assertIn("get_instructions", names)
         self.assertIn("get_cheats", names)
+        self.assertIn("list_skills", names)
+        self.assertIn("get_skill", names)
         self.assertNotIn("where_is", names)  # у фикстуры нет карточки инструмента
 
     def test_notification_is_202_without_body(self):
@@ -202,7 +204,7 @@ class HttpServer(unittest.TestCase):
             self.assertEqual("deadbeef1234", result["ревизия"])
             self.assertIn("Новая особенность", result["текст"])
             names = [t["name"] for t in json.loads(self.rpc("tools/list")[2])["result"]["tools"]]
-            self.assertEqual(13, len(names))
+            self.assertEqual(15, len(names))
         finally:
             self.knowledge.current = old
         result = self.tool_text(self.rpc("tools/call", {"name": "get_instructions",

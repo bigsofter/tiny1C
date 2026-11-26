@@ -216,7 +216,7 @@ tiny1c-mcp:
 и `MCP-Protocol-Version: 2025-11-25`; тело — JSON-RPC (`initialize`,
 `tools/list`, `tools/call`). Сессий нет: каждый запрос самостоятелен. Группа
 `instructions` (`match_config`, `get_instructions`, `get_instructions_file`,
-`get_cheats`) в этом режиме включена по умолчанию. Проверка живости — `GET /healthz` без токена.
+`get_cheats`, `list_skills`, `get_skill`) в этом режиме включена по умолчанию. Проверка живости — `GET /healthz` без токена.
 
 Версия знаний в ответах — поле `ревизия` (sha коммита `main`) у
 `get_instructions`/`get_cheats` и в `/healthz`; версия кода — только версия

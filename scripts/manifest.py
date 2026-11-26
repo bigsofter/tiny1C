@@ -35,7 +35,11 @@
      чипы — JSON-список записей с id/заголовок/текст; потолки: текст для
      промпта (profile + where_is + notes + chips после сжатия по mcp/packtext.py)
      не больше PROMPT_LIMIT, сырые файлы пакета — PACK_LIMIT, шпаргалки —
-     CHEATS_LIMIT. Файл sources.md (источники S-n с URL) в пакет не входит.
+     CHEATS_LIMIT. Файл sources.md (источники S-n с URL) в пакет не входит;
+ 10. навыки помощника `tracks/<код>/skills/<имя>.md` — ключ «навыки» пакета:
+     шапка `имя`/`заголовок`/`когда`/`источник`, необязательно `нужно` (JSON) и
+     `запуск` (JSON), тело до SKILL_BODY_LIMIT; в навыке нет ссылок и (в `запуск`)
+     разметки; навыков на направление и их сумма — под потолками (см. SKILL_* ниже).
 
 Использование:
   scripts/manifest.py             собрать manifest.json
@@ -61,10 +65,35 @@ PACK_FILES = ["where_is.md", "objects.md", "notes.md", "faq.md", "chips.json"]
 PACK_TITLES = {"where_is.md": "Где это в 1С", "objects.md": "Объекты и документы",
                "notes.md": "Особенности конфигурации", "faq.md": "Типовые вопросы"}
 CHEATS_DIR = "cheats"
+SKILLS_DIR = "skills"
 PROMPT_FILES = ["where_is.md", "notes.md"]   # markdown-части, которые get_instructions кладёт в промпт
 PROMPT_LIMIT = 24 * 1024        # байт текста для промпта на направление (профиль + where_is + notes + чипы, сжато)
 PACK_LIMIT = 96 * 1024          # байт сырых файлов пакета направления (справочник с пометками)
 CHEATS_LIMIT = 24 * 1024        # байт шпаргалок (они тоже идут в промпт целиком)
+# Навыки: текст по запросу (инструмент get_skill), а не в промпте целиком; потолки считаются и по
+# каталогу направления, и по набору, который увидит помощник (core + цепочка «расширяет» + своё).
+SKILL_BODY_LIMIT = 16 * 1024    # байт тела одного навыка
+SKILL_COUNT_LIMIT = 20          # навыков на направление
+SKILL_TOTAL_LIMIT = 96 * 1024   # байт тел всех навыков направления
+SKILL_REQUIRED = ["имя", "заголовок", "когда", "источник"]
+SKILL_OPTIONAL = ["нужно", "запуск"]
+SKILL_NAME_RE = re.compile(r"^[a-z0-9-]{2,40}$")
+SKILL_TITLE_LIMIT = 60          # рун
+SKILL_WHEN_LIMIT = 200          # рун
+SKILL_NEEDS_KEYS = ["caps", "access"]
+SKILL_NEEDS_ITEM_RE = re.compile(r"^[a-z0-9_.:-]{1,40}$")
+SKILL_NEEDS_ITEMS = 8
+SKILL_RUN_KEYS = ["text", "params"]
+SKILL_RUN_TEXT_LIMIT = 300      # рун
+SKILL_RUN_PARAMS = 4
+SKILL_PARAM_REQUIRED = ["key", "label", "kind"]
+SKILL_PARAM_OPTIONAL = ["required"]
+SKILL_PARAM_KINDS = ["text", "inn", "period"]
+SKILL_PARAM_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,19}$")
+SKILL_PARAM_LABEL_LIMIT = 60    # рун
+SKILL_URL_RE = re.compile(r"(?i)(?:https?|ftp)://|\bwww\.|\b[a-z0-9-]+\.(?:ru|com|org|net)/")
+SKILL_MARKUP_RE = re.compile(r"[`*#<>\[\]|~\\\n\r]")   # разметка и перевод строки в тексте запуска
+SKILL_PLACEHOLDER_RE = re.compile(r"\{([^{}]*)\}")
 PROFILE_REQUIRED = ["семейство", "имена", "тема"]
 PROFILE_OPTIONAL = ["синоним_re", "мин_версия", "поставщики", "признаки", "план_счетов",
                     "виды_субконто", "без_кода", "расширяет"]
@@ -411,7 +440,8 @@ def collect_pack(code, track_dir, errors):
             cheats.append({"имя": name[:-3], "заголовок": title,
                            "файл": "tracks/%s/%s/%s" % (code, CHEATS_DIR, name),
                            "sha": file_digest(text), "размер": len(text.encode("utf-8"))})
-    if profile is None and not files and not cheats:
+    skills = collect_skills(code, track_dir, errors)
+    if profile is None and not files and not cheats and not skills:
         return None
     size = sum(item["размер"] for item in files)
     cheats_size = sum(item["размер"] for item in cheats)
@@ -427,10 +457,236 @@ def collect_pack(code, track_dir, errors):
         "расширяет": (profile or {}).get("расширяет"),
         "файлы": files,
         "шпаргалки": cheats,
+        "навыки": skills,
         "размер": size,
         "размер_промпта": prompt_size,
         "размер_шпаргалок": cheats_size,
     }
+
+
+def skill_json(data, field, where, errors):
+    """JSON-значение шапки навыка (нужно, запуск): объект или None при ошибке."""
+    raw = data[field]
+    if isinstance(raw, list):
+        # read_document разбирает «[...]» как плоский список; для этих полей нужен объект
+        errors.append("%s: «%s» должно быть объектом JSON, а не списком" % (where, field))
+        return None
+    if not isinstance(raw, str) or not raw.strip():
+        errors.append("%s: «%s» пусто — нужен JSON-объект в одну строку" % (where, field))
+        return None
+    try:
+        value = json.loads(raw)
+    except ValueError as error:
+        errors.append("%s: «%s» не JSON (%s)" % (where, field, error))
+        return None
+    if not isinstance(value, dict):
+        errors.append("%s: «%s» должно быть объектом JSON" % (where, field))
+        return None
+    return value
+
+
+def check_skill_needs(value, where, errors):
+    """«нужно»: {"caps": [...], "access": [...]} — закрытый набор ключей. Возвращает нормализованный объект."""
+    result = {key: [] for key in SKILL_NEEDS_KEYS}
+    for key in value:
+        if key not in SKILL_NEEDS_KEYS:
+            errors.append("%s: «нужно» — неизвестный ключ «%s» (есть: %s)"
+                          % (where, key, ", ".join(SKILL_NEEDS_KEYS)))
+    for key in SKILL_NEEDS_KEYS:
+        items = value.get(key, [])
+        if not isinstance(items, list) or len(items) > SKILL_NEEDS_ITEMS \
+                or not all(isinstance(item, str) and SKILL_NEEDS_ITEM_RE.match(item) for item in items):
+            errors.append("%s: «нужно.%s» — список до %d коротких имён (латиница, цифры, _.:-)"
+                          % (where, key, SKILL_NEEDS_ITEMS))
+        else:
+            result[key] = list(items)
+    return result
+
+
+def check_skill_run(value, where, errors):
+    """«запуск»: {"text": ..., "params": [...]} — шаблон реплики человека. Возвращает нормализованный объект."""
+    for key in value:
+        if key not in SKILL_RUN_KEYS:
+            errors.append("%s: «запуск» — неизвестный ключ «%s» (есть: %s)"
+                          % (where, key, ", ".join(SKILL_RUN_KEYS)))
+    text = value.get("text")
+    if not isinstance(text, str) or not text.strip():
+        errors.append("%s: «запуск.text» — непустая строка" % where)
+        text = ""
+    else:
+        if len(text) > SKILL_RUN_TEXT_LIMIT:
+            errors.append("%s: «запуск.text» %d рун, потолок %d" % (where, len(text), SKILL_RUN_TEXT_LIMIT))
+        if SKILL_URL_RE.search(text):
+            errors.append("%s: «запуск.text» со ссылкой — ссылок в навыках нет" % where)
+        if SKILL_MARKUP_RE.search(text):
+            errors.append("%s: «запуск.text» с разметкой или переводом строки — нужна одна строка простого текста"
+                          % where)
+    params = value.get("params", [])
+    clean = []
+    if not isinstance(params, list):
+        errors.append("%s: «запуск.params» — список" % where)
+        params = []
+    if len(params) > SKILL_RUN_PARAMS:
+        errors.append("%s: в «запуск.params» %d параметров, потолок %d" % (where, len(params), SKILL_RUN_PARAMS))
+    keys = []
+    for position, param in enumerate(params):
+        label = "«запуск.params» №%d" % (position + 1)
+        if not isinstance(param, dict):
+            errors.append("%s: %s не объект" % (where, label))
+            continue
+        for key in param:
+            if key not in SKILL_PARAM_REQUIRED + SKILL_PARAM_OPTIONAL:
+                errors.append("%s: %s — неизвестное поле «%s» (есть: %s)"
+                              % (where, label, key, ", ".join(SKILL_PARAM_REQUIRED + SKILL_PARAM_OPTIONAL)))
+        for key in SKILL_PARAM_REQUIRED:
+            if not isinstance(param.get(key), str) or not param[key].strip():
+                errors.append("%s: %s без поля «%s»" % (where, label, key))
+        key = param.get("key")
+        if isinstance(key, str):
+            if not SKILL_PARAM_KEY_RE.match(key):
+                errors.append("%s: %s — ключ «%s» не по формату (латиница, цифры, _; до 20)" % (where, label, key))
+            if key in keys:
+                errors.append("%s: %s — ключ «%s» повторяется" % (where, label, key))
+            keys.append(key)
+        title = param.get("label")
+        if isinstance(title, str) and (len(title) > SKILL_PARAM_LABEL_LIMIT or SKILL_URL_RE.search(title)
+                                       or SKILL_MARKUP_RE.search(title)):
+            errors.append("%s: %s — подпись до %d рун, без ссылок и разметки"
+                          % (where, label, SKILL_PARAM_LABEL_LIMIT))
+        if param.get("kind") not in SKILL_PARAM_KINDS:
+            errors.append("%s: %s — вид «%s» не из списка: %s"
+                          % (where, label, param.get("kind"), ", ".join(SKILL_PARAM_KINDS)))
+        required = param.get("required", False)
+        if not isinstance(required, bool):
+            errors.append("%s: %s — «required» true/false" % (where, label))
+            required = False
+        clean.append({"key": key, "label": title, "kind": param.get("kind"), "required": required})
+    used = []
+    for match in SKILL_PLACEHOLDER_RE.finditer(text):
+        used.append(match.group(1))
+        if match.group(1) not in keys:
+            errors.append("%s: «запуск.text» ссылается на {%s}, а такого параметра нет" % (where, match.group(1)))
+    rest = SKILL_PLACEHOLDER_RE.sub("", text)
+    if "{" in rest or "}" in rest:
+        errors.append("%s: «запуск.text» — одиночная фигурная скобка (подстановки только вида {ключ})" % where)
+    for key in keys:
+        if key not in used:
+            errors.append("%s: параметр «%s» не подставлен в «запуск.text» — человек вводил бы его зря"
+                          % (where, key))
+    return {"text": text, "params": clean}
+
+
+def collect_skills(code, track_dir, errors):
+    """Навыки tracks/<код>/skills/*.md (кроме README.md): список записей манифеста, по имени.
+
+    Навык — текст, который помощник читает по запросу (get_skill) и считает инструкцией,
+    поэтому проверка строгая: шапка из закрытого набора ключей, тело без ссылок и управляющих
+    символов, потолок размера. Правила по направлению в целом (число, сумма, повтор имён
+    с core и цепочкой «расширяет») проверяет вызывающий после сбора всех направлений.
+    """
+    skills = []
+    skills_dir = os.path.join(track_dir, SKILLS_DIR)
+    if not os.path.isdir(skills_dir):
+        return skills
+    for name in sorted(os.listdir(skills_dir)):
+        if not name.endswith(".md") or name == "README.md":
+            continue
+        where = "%s/%s/%s" % (code, SKILLS_DIR, name)
+        text = read_pack_text(os.path.join(skills_dir, name), where, errors)
+        if text is None:
+            continue
+        data, body = read_document(os.path.join(skills_dir, name))
+        if data is None:
+            errors.append("%s: нет шапки (--- ... --- в начале файла)" % where)
+            continue
+        for field in SKILL_REQUIRED:
+            if not isinstance(data.get(field), str) or not data[field].strip():
+                errors.append("%s: нет поля «%s»" % (where, field))
+        for field in data:
+            if field not in SKILL_REQUIRED + SKILL_OPTIONAL:
+                errors.append("%s: неизвестное поле шапки «%s» (есть: %s)"
+                              % (where, field, ", ".join(SKILL_REQUIRED + SKILL_OPTIONAL)))
+        skill_name = data.get("имя", "")
+        if skill_name != name[:-3]:
+            errors.append("%s: имя «%s» не совпадает с именем файла" % (where, skill_name))
+        if not isinstance(skill_name, str) or not SKILL_NAME_RE.match(skill_name):
+            errors.append("%s: имя «%s» не по формату (латиница, цифры, дефис; 2-40)" % (where, skill_name))
+        title, when = data.get("заголовок", ""), data.get("когда", "")
+        if isinstance(title, str) and len(title) > SKILL_TITLE_LIMIT:
+            errors.append("%s: заголовок %d рун, потолок %d" % (where, len(title), SKILL_TITLE_LIMIT))
+        if isinstance(when, str) and len(when) > SKILL_WHEN_LIMIT:
+            errors.append("%s: «когда» %d рун, потолок %d" % (where, len(when), SKILL_WHEN_LIMIT))
+        check_source(data, where, errors)
+        needs = {key: [] for key in SKILL_NEEDS_KEYS}
+        if "нужно" in data:
+            value = skill_json(data, "нужно", where, errors)
+            if value is not None:
+                needs = check_skill_needs(value, where, errors)
+        run = None
+        if "запуск" in data:
+            value = skill_json(data, "запуск", where, errors)
+            if value is not None:
+                run = check_skill_run(value, where, errors)
+        header = text.split("\n---", 1)[0]
+        for part, label in ((header, "шапке"), (body, "тексте")):
+            if SKILL_URL_RE.search(part):
+                errors.append("%s: ссылка в %s навыка — ссылок в навыках нет (источники — в sources.md)"
+                              % (where, label))
+        body = body.strip("\n")
+        size = len(body.encode("utf-8"))
+        if not body.strip():
+            errors.append("%s: пустое тело навыка" % where)
+        if size > SKILL_BODY_LIMIT:
+            errors.append("%s: тело навыка %d байт, потолок %d — разделить на два навыка или вынести "
+                          "подробности в faq/objects" % (where, size, SKILL_BODY_LIMIT))
+        skills.append({"имя": name[:-3], "заголовок": title, "когда": when, "нужно": needs,
+                       "запуск": run, "источник": data.get("источник"),
+                       "файл": "tracks/%s/%s/%s" % (code, SKILLS_DIR, name),
+                       "sha": file_digest(text), "размер": size})
+    return skills
+
+
+def check_skill_sets(tracks, errors):
+    """Навыки по направлению в целом: потолки и повтор имён для набора, который увидит помощник.
+
+    Набор направления = core, затем цепочка «расширяет» (база первой), затем свои. Потолки (число,
+    сумма байт) считаются и по каталогу направления, и по этому набору — list_skills отдаёт набор.
+    Имя навыка core нельзя занять в другом направлении (иначе у модели два разных навыка с одним
+    именем); навык направления закрывает одноимённый навык базы по «расширяет» — так задумано.
+    """
+    skills = {track["код"]: (track.get("инструкции") or {}).get("навыки", []) for track in tracks}
+    packs = {track["код"]: track.get("инструкции") for track in tracks}
+    core = {item["имя"] for item in skills.get("core", [])}
+    for code, items in sorted(skills.items()):
+        seen = set()
+        for item in items:
+            if item["имя"] in seen:
+                errors.append("%s: имя навыка «%s» повторяется" % (code, item["имя"]))
+            seen.add(item["имя"])
+            if code != "core" and item["имя"] in core:
+                errors.append("%s: навык «%s» уже есть в core — имя занято для всех направлений"
+                              % (item["файл"], item["имя"]))
+        if len(items) > SKILL_COUNT_LIMIT:
+            errors.append("%s: навыков %d, потолок %d" % (code, len(items), SKILL_COUNT_LIMIT))
+        if sum(item["размер"] for item in items) > SKILL_TOTAL_LIMIT:
+            errors.append("%s: навыки %d байт, потолок %d"
+                          % (code, sum(item["размер"] for item in items), SKILL_TOTAL_LIMIT))
+        if code == "core":
+            continue
+        effective, chain, current = {}, [], code
+        while current and current in packs and current not in chain and len(chain) < 4:
+            chain.append(current)
+            current = ((packs[current] or {}).get("расширяет")) or None
+        for source in ["core"] + list(reversed(chain)):
+            for item in skills.get(source, []):
+                effective[item["имя"]] = item
+        if len(effective) > SKILL_COUNT_LIMIT:
+            errors.append("%s: набор навыков направления (с core и «расширяет») %d, потолок %d"
+                          % (code, len(effective), SKILL_COUNT_LIMIT))
+        total = sum(item["размер"] for item in effective.values())
+        if total > SKILL_TOTAL_LIMIT:
+            errors.append("%s: набор навыков направления (с core и «расширяет») %d байт, потолок %d"
+                          % (code, total, SKILL_TOTAL_LIMIT))
 
 
 def check_extends(tracks, errors):
@@ -677,6 +933,7 @@ def collect(root=None):
         entry["инструкции"] = collect_pack(code, track_dir, errors)
         tracks.append(entry)
     check_extends(tracks, errors)
+    check_skill_sets(tracks, errors)
 
     by_object = {}
     for rule in rules:
